@@ -1,5 +1,32 @@
 # 变更日志
 
+## v1.6.0
+* 新增：
+  - 启动时自动迁移旧插件名遗留的数据目录，改名后历史数据不丢。
+* 修改：
+  - 插件 ID 与目录更名为 `astrbot_plugin_Xavier_care`（插件列表显示名仍为「小狗健康」）。
+  - 数据目录改为 `data/plugin_data/astrbot_plugin_Xavier_care/`，配置文件改为 `astrbot_plugin_Xavier_care_config.json`。
+  - 日志前缀由 `[health_bridge]` 统一改为 `[Xavier_care]`。
+  - metadata 的 repo 字段补全为仓库地址；README 与测试导入路径同步更新。
+* 修复：
+  - 无。
+* 原因：
+  - 与仓库名 `astrbot_plugin_Xavier_care` 保持一致。
+
+## v1.5.0
+* 移除：
+  - `prune_old_events()` 及配套配置项 `events_keep_days`。
+  - `store_report()` 中对 `events` / `event` / `app_name` / `source` 的合并入库逻辑，这些字段现在一律丢弃。
+  - 摘要与日详情里的事件渲染分支（「最近动态」「事件：」两处）。
+  - 未完成的「每日独白」相关代码：`load_prev_day_report()`、`save_daily_thought()`，以及 `daily_thought` / `daily_thought_at` 两个字段。
+* 修改：
+  - 存储层不再保存任何 App 使用记录；历史数据文件中残留的 `events` 字段一并清除。
+  - 历史数据文件中残留的 `daily_thought` / `daily_thought_at` 字段一并清除。
+* 修复：
+  - 测试中两个期望「非法日期抛异常」的用例与实现（兜底成今天）不符，已按当前契约重写。
+  - 修正 `normalize_payload` 内「不合法即抛」的过时注释。
+* 原因：
+  - App 使用记录已由 astrbot_plugin_event_sensor（小狗雷达）独立采集，健康插件不必再承担该职责，也不应留存相关数据。
 ## v1.4.0
 * 新增：
   - 统一指令入口 `/health`，原 `/health_monitor` 与 `/health_period` 合并为一条指令。

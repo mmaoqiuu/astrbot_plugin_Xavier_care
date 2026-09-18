@@ -1,4 +1,4 @@
-# health_bridge/monitor.py
+# Xavier_care/monitor.py
 """基于按天 JSON 的健康异常检测 + 冷却控制。
 
 时区原则跟 health_logic.py 一致：不读服务器时钟，
@@ -37,7 +37,7 @@ class HealthMonitor:
                 json.dumps(self._cooldowns), encoding="utf-8"
             )
         except Exception:
-            logger.exception("[health_bridge] 写冷却状态失败")
+            logger.exception("[Xavier_care] 写冷却状态失败")
 
     def _in_cooldown(self, key: str) -> bool:
         hours = float(self.config.get(f"cooldown_hours_{key}", 8))
@@ -161,7 +161,7 @@ class HealthMonitor:
         baseline_ready = len(history) >= 3
         if not baseline_ready:
             logger.info(
-                f"[health_bridge] 基线天数不足({len(history)}/3)，"
+                f"[Xavier_care] 基线天数不足({len(history)}/3)，"
                 f"仅做绝对阈值检测（血氧 / 熬夜 / 入睡时间）"
             )
 

@@ -1,4 +1,4 @@
-"""health_bridge 的纯逻辑核心。
+"""Xavier_care 的纯逻辑核心。
 
 这个模块刻意不导入任何 AstrBot 的东西，也不开网络监听。
 所有「解析 / 存储 / 读取 / 格式化」都在这里，可以脱离 AstrBot 在本地用
@@ -8,9 +8,8 @@
 日期一律以手机发来的 `date` 为准；连数据保留的「过期」判断也以
 已存数据里最新的那天为基准来算，绝不读服务器时钟。
 
-例外：`_received_at`、`current_time`、`daily_thought_at` 由接收端在
-「收到/生成那一刻」写入（用服务器时钟），仅用于标注/展示，
-不参与任何日期/过期判断。
+例外：`_received_at`、`current_time` 由接收端在「收到那一刻」写入
+（用服务器时钟），仅用于标注/展示，不参与任何日期/过期判断。
 """
 
 from __future__ import annotations
@@ -379,8 +378,8 @@ def normalize_payload(payload: object) -> list[dict]:
         if not records:
             raise InvalidPayloadError("Health Auto Export 数据里没有可用的日期/指标")
         return records
-    # 原生契约
-    extract_date(payload)  # 校验 date，不合法即抛
+    # 原生契约：date 缺失或非法时，由 extract_date 兜底成今天。
+    extract_date(payload)
     return [payload]
 
 
@@ -392,7 +391,7 @@ def normalize_payload(payload: object) -> list[dict]:
 def store_report(data_dir: Path, data: dict) -> Path:
     """把一条当天数据写成文件。返回写入的文件路径。
 
-    支持增量合并同一天的数据，保留事件记录等。
+    支持增量合并同一天的数据。
     每次存储都会把 `_received_at` 和 `current_time` 刷成服务器当前时间，
     分别用于向 LLM 标注数据新鲜度、以及实时熬夜判定。
     """
@@ -407,21 +406,14 @@ def store_report(data_dir: Path, data: dict) -> Path:
         except Exception:
             merged = {}
 
+    has_app_event = "event" in data
     for k, v in data.items():
-        if k == "events" and isinstance(v, list):
-            merged.setdefault("events", []).extend(v)
-        elif k == "event" and "event" in data:
-            ev_list = merged.setdefault("events", [])
-            ev_item = {
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "event": data.get("event"),
-                "app_name": data.get("app_name"),
-                "source": data.get("source")
-            }
-            ev_list.append(ev_item)
-        elif k in ("app_name", "source") and "event" in data:
+        # App 使用记录（events / event）已移交 event_sensor 插件处理，这里一律不入库。
+        if k in ("events", "event"):
             continue
-        elif isinstance(v, dict) and isinstance(merged.get(k), dict):
+        if has_app_event and k in ("app_name", "source"):
+            continue
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
             merged[k].update(v)
         elif isinstance(v, list) and isinstance(merged.get(k), list):
             for item in v:
@@ -617,67 +609,6 @@ def compute_period_status(data_dir: Path, default_cycle: int = 28) -> dict:
         "avg_cycle": avg_cycle,
         "avg_length": avg_length,
     }
-
-
-# ---------------------------------------------------------------------------
-# 每日独白：读「前一天」数据（供 LLM 生成用），写「当天」文件的 daily_thought。
-# LLM 调用不在这里（纯逻辑模块不碰 AstrBot），这里只负责「读写文件」。
-# ---------------------------------------------------------------------------
-
-
-def load_prev_day_report(data_dir: Path) -> tuple[str, str] | None:
-    """读「最新一天的前一天」的数据，返回 (日期, 格式化文字)。
-
-    找不到前一天时，退回用最新一天。
-    完全没有数据返回 None。
-    """
-    dates = list_dates(data_dir)
-    if not dates:
-        return None
-    # 找「最新一天」的前一天
-    if len(dates) >= 2:
-        prev_date = dates[-2]
-    else:
-        prev_date = dates[-1]   # 只有一天，就用那天
-    data = load_by_date(data_dir, prev_date)
-    if not data:
-        return None
-    try:
-        data["_period_status"] = compute_period_status(data_dir)
-    except Exception:
-        pass
-    return prev_date, format_report(data)
-
-
-def save_daily_thought(data_dir: Path, date_str: str, thought: str) -> bool:
-    """把独白写进指定日期文件的 daily_thought 字段。
-
-    日期非法 / 写失败返回 False。
-    """
-    if not is_valid_date(date_str):
-        return False
-    data_dir.mkdir(parents=True, exist_ok=True)
-    target = data_dir / f"{date_str}.json"
-
-    merged = {}
-    if target.is_file():
-        try:
-            merged = json.loads(target.read_text(encoding="utf-8"))
-        except Exception:
-            merged = {}
-
-    merged["date"] = date_str
-    merged["daily_thought"] = thought
-    merged["daily_thought_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    try:
-        text = json.dumps(merged, ensure_ascii=False, indent=2)
-        tmp = data_dir / f".{date_str}.json.tmp"
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, target)
-    except OSError:
-        return False
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -879,17 +810,6 @@ def _day_fragments(data: dict) -> list[str]:
     if weight is not None:
         frags.append(f"体重 {weight}kg")
 
-    events = data.get("events")
-    if isinstance(events, list) and events:
-        ev_strs = []
-        for ev in events:
-            if isinstance(ev, dict):
-                t = ev.get("time", "")
-                name = ev.get("app_name") or ev.get("event") or "事件"
-                ev_strs.append(f"{t} 打开了 {name}" if t else f"打开了 {name}")
-        if ev_strs:
-            frags.append("最近动态：" + "；".join(ev_strs[-3:]))
-
     return frags
 
 
@@ -969,17 +889,6 @@ def format_report(data: dict | None) -> str:
         names = [s for s in symptoms if isinstance(s, str) and s.strip()]
         if names:
             lines.append("症状：" + "、".join(names) + "。")
-
-    events = data.get("events")
-    if isinstance(events, list) and events:
-        ev_strs = []
-        for ev in events:
-            if isinstance(ev, dict):
-                t = ev.get("time", "")
-                name = ev.get("app_name") or ev.get("event") or ""
-                ev_strs.append(f"{t} {name}".strip())
-        if ev_strs:
-            lines.append("事件：" + "、".join(ev_strs) + "。")
 
     # 只有日期行、没有任何指标：明说一句，免得下游以为有内容。
     if len(lines) == 1:

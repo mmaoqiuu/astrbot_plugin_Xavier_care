@@ -1,4 +1,4 @@
-"""health_bridge —— 健康数据接入插件（AstrBot v4.25.1）。
+"""Xavier_care —— 健康数据接入插件（AstrBot v4.25.1）。
 
 三件事：
   模块一：开一个独立的 HTTP 端点，接住手机推来的当天健康数据并存成文件。
@@ -24,6 +24,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -40,7 +41,10 @@ from .monitor import HealthMonitor
 
 # 插件目录名，同时用作数据子目录名。数据存在 AstrBot 的 data 目录下，
 # 不放插件自身目录，这样更新/重装插件不丢历史数据。
-PLUGIN_DIR_NAME = "astrbot_plugin_health_bridge"
+PLUGIN_DIR_NAME = "astrbot_plugin_Xavier_care"
+
+# 插件更名前使用的目录名，仅用于历史数据的一次性迁移。
+LEGACY_DIR_NAME = "astrbot_plugin_health_bridge"
 
 # 接收端点路径。固定值；真正的门锁是 auth_token，不是这个路径。
 ENDPOINT_PATH = "/health/report"
@@ -57,7 +61,7 @@ class HealthBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        # data/plugin_data/astrbot_plugin_health_bridge/<date>.json
+        # data/plugin_data/astrbot_plugin_Xavier_care/<date>.json
         self._data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_DIR_NAME
         # aiohttp 监听相关对象，启动后赋值，便于 terminate 时干净关闭。
         self._app: web.Application | None = None
@@ -84,15 +88,34 @@ class HealthBridge(Star):
             return
         self._last_event = event
 
+    def _migrate_legacy_data_dir(self) -> None:
+        """插件更名后的一次性迁移：把旧目录里的数据复制过来（只复制，不删除旧目录）。"""
+        legacy = Path(get_astrbot_data_path()) / "plugin_data" / LEGACY_DIR_NAME
+        if not legacy.is_dir() or legacy == self._data_dir:
+            return
+        try:
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            copied = 0
+            for item in legacy.iterdir():
+                target = self._data_dir / item.name
+                if item.is_file() and not target.exists():
+                    shutil.copy2(item, target)
+                    copied += 1
+            if copied:
+                logger.info(f"[Xavier_care] 已从旧目录 {LEGACY_DIR_NAME} 迁移 {copied} 个数据文件")
+        except OSError:
+            logger.exception("[Xavier_care] 迁移旧数据目录失败（不影响新数据写入）")
+
     # -- 生命周期 ---------------------------------------------------------
 
     async def initialize(self) -> None:
         """插件激活时调用：确保密钥、建目录、清过期、起监听、起 monitor。"""
         self._ensure_auth_token()
+        self._migrate_legacy_data_dir()
         try:
             self._data_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
-            logger.exception("[health_bridge] 创建数据目录失败")
+            logger.exception("[Xavier_care] 创建数据目录失败")
         self._run_cleanup()
         await self._start_server()
 
@@ -100,7 +123,7 @@ class HealthBridge(Star):
         if self._monitor_runtime_enabled:
             self._monitor_task = asyncio.create_task(self._monitor_loop())
             logger.info(
-                f"[health_bridge] 主动关怀已启动，间隔 "
+                f"[Xavier_care] 主动关怀已启动，间隔 "
                 f"{int(self.config.get('check_interval', 900))}s"
             )
 
@@ -113,7 +136,7 @@ class HealthBridge(Star):
             except asyncio.CancelledError:
                 pass
             except Exception:
-                logger.exception("[health_bridge] 停止 monitor 时出错")
+                logger.exception("[Xavier_care] 停止 monitor 时出错")
             self._monitor_task = None
         await self._stop_server()
 
@@ -126,13 +149,13 @@ class HealthBridge(Star):
         try:
             self.config.save_config()
             logger.warning(
-                "[health_bridge] 未配置 auth_token，已自动生成一串专属密钥并写入配置。"
+                "[Xavier_care] 未配置 auth_token，已自动生成一串专属密钥并写入配置。"
                 "请在 WebUI 插件配置里查看 auth_token，并把同样的值填进手机上报端。"
             )
         except Exception:
             self.config["auth_token"] = ""
             logger.warning(
-                "[health_bridge] 自动生成密钥后写入配置失败，已放弃以避免密钥落日志。"
+                "[Xavier_care] 自动生成密钥后写入配置失败，已放弃以避免密钥落日志。"
                 "接收端在配置前会拒收一切；请在 WebUI 手动填写 auth_token 后重载插件。"
             )
 
@@ -165,23 +188,23 @@ class HealthBridge(Star):
             await site.start()
             self._app, self._runner, self._site = app, runner, site
             logger.info(
-                f"[health_bridge] 接收端已启动：监听 0.0.0.0:{port}{ENDPOINT_PATH}（仅 POST）"
+                f"[Xavier_care] 接收端已启动：监听 0.0.0.0:{port}{ENDPOINT_PATH}（仅 POST）"
             )
             if not self.config.get("auth_token"):
                 logger.warning(
-                    "[health_bridge] auth_token 尚未配置，配置前所有上报都会被拒绝（401）。"
+                    "[Xavier_care] auth_token 尚未配置，配置前所有上报都会被拒绝（401）。"
                     "请在 WebUI 插件配置里填写。"
                 )
         except Exception:
             logger.exception(
-                f"[health_bridge] 接收端启动失败（端口 {port} 可能被占用或被防火墙拦）。"
+                f"[Xavier_care] 接收端启动失败（端口 {port} 可能被占用或被防火墙拦）。"
                 "读取工具仍可用，但暂时收不到新数据。"
             )
             if runner is not None:
                 try:
                     await runner.cleanup()
                 except Exception:
-                    logger.exception("[health_bridge] 回收启动失败的监听器时出错")
+                    logger.exception("[Xavier_care] 回收启动失败的监听器时出错")
 
     async def _stop_server(self) -> None:
         site, runner = self._site, self._runner
@@ -190,12 +213,12 @@ class HealthBridge(Star):
             if site is not None:
                 await site.stop()
         except Exception:
-            logger.exception("[health_bridge] 停止监听站点时出错")
+            logger.exception("[Xavier_care] 停止监听站点时出错")
         try:
             if runner is not None:
                 await runner.cleanup()
         except Exception:
-            logger.exception("[health_bridge] 清理监听器时出错")
+            logger.exception("[Xavier_care] 清理监听器时出错")
 
     async def _handle_report(self, request: web.Request) -> web.Response:
         """处理手机的一次上报。任何异常都兜住，不让插件崩。"""
@@ -204,7 +227,7 @@ class HealthBridge(Star):
             provided = request.headers.get(AUTH_HEADER, "")
 
             if not token:
-                logger.warning("[health_bridge] 收到上报但 auth_token 未配置，已拒绝。")
+                logger.warning("[Xavier_care] 收到上报但 auth_token 未配置，已拒绝。")
                 return web.json_response(
                     {"ok": False, "error": "server not configured"}, status=401
                 )
@@ -227,21 +250,21 @@ class HealthBridge(Star):
                 try:
                     saved_days.append(health_logic.store_report(self._data_dir, rec).stem)
                 except health_logic.InvalidPayloadError as e:
-                    logger.warning(f"[health_bridge] 丢弃一条非法记录: {e}")
+                    logger.warning(f"[Xavier_care] 丢弃一条非法记录: {e}")
                     continue
             if not saved_days:
                 return web.json_response({"ok": False, "error": "no usable data"}, status=400)
 
             self._run_cleanup()
             logger.info(
-                f"[health_bridge] 已接收并存储 {len(saved_days)} 天数据：{', '.join(saved_days)}"
+                f"[Xavier_care] 已接收并存储 {len(saved_days)} 天数据：{', '.join(saved_days)}"
             )
             return web.json_response({"ok": True, "saved": saved_days})
 
         except web.HTTPException:
             raise
         except Exception:
-            logger.exception("[health_bridge] 处理上报时发生未预期错误")
+            logger.exception("[Xavier_care] 处理上报时发生未预期错误")
             return web.json_response({"ok": False, "error": "internal error"}, status=500)
 
     async def _send_direct(self, umo: str, text: str) -> bool:
@@ -252,7 +275,7 @@ class HealthBridge(Star):
             ok = await self.context.send_message(umo, chain)
             return bool(ok)
         except Exception:
-            logger.exception(f"[health_bridge] 直发兜底失败 umo={umo}")
+            logger.exception(f"[Xavier_care] 直发兜底失败 umo={umo}")
             return False
 
     async def _trigger_event_wakeup(self, prompt: str) -> bool:
@@ -303,7 +326,7 @@ class HealthBridge(Star):
                     if cq_bot:
                         break
             except Exception as e:
-                logger.debug(f"[health_bridge] 搜索 bot 实例失败: {e}")
+                logger.debug(f"[Xavier_care] 搜索 bot 实例失败: {e}")
 
         if not bot_self_id and cq_bot and hasattr(cq_bot, "get_login_info"):
             try:
@@ -313,13 +336,13 @@ class HealthBridge(Star):
                 pass
 
         if not umo:
-            logger.info("[health_bridge] 尚未记录到最近会话交互，跳过即时唤醒")
+            logger.info("[Xavier_care] 尚未记录到最近会话交互，跳过即时唤醒")
             return False
 
         try:
             from aiocqhttp import Event as CQEvent
         except ImportError:
-            logger.warning("[health_bridge] 未找到 aiocqhttp，跳过伪造注入")
+            logger.warning("[Xavier_care] 未找到 aiocqhttp，跳过伪造注入")
             return False
 
         parts = umo.rsplit(":", 2)
@@ -371,13 +394,13 @@ class HealthBridge(Star):
             handler = getattr(cq_bot, "_handle_event", None) or getattr(cq_bot, "handle_event", None)
             if handler:
                 await handler(fake_event)
-                logger.info(f"[health_bridge] 🎯 已成功注入消息 | umo={umo}")
+                logger.info(f"[Xavier_care] 🎯 已成功注入消息 | umo={umo}")
                 return True
             else:
-                logger.warning("[health_bridge] cq_bot 没有可用 handle_event 方法")
+                logger.warning("[Xavier_care] cq_bot 没有可用 handle_event 方法")
                 return False
         else:
-            logger.warning("[health_bridge] 未获取到 cq_bot 实例，无法注入")
+            logger.warning("[Xavier_care] 未获取到 cq_bot 实例，无法注入")
             return False
 
     # -- 模块三：主动关怀 monitor ------------------------------------------
@@ -399,7 +422,7 @@ class HealthBridge(Star):
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(line, ensure_ascii=False) + "\n")
         except Exception:
-            logger.exception("[health_bridge] 写关怀日志失败（不影响推送）")
+            logger.exception("[Xavier_care] 写关怀日志失败（不影响推送）")
 
     async def _monitor_loop(self) -> None:
         """后台轮询：每隔 check_interval 秒扫一次健康数据。"""
@@ -411,7 +434,7 @@ class HealthBridge(Star):
             except asyncio.CancelledError:
                 break
             except Exception:
-                logger.exception("[health_bridge] monitor tick 出错")
+                logger.exception("[Xavier_care] monitor tick 出错")
 
     def _in_quiet_hours(self) -> bool:
         """静默时段判断。支持跨天（如 23 → 7）。"""
@@ -432,7 +455,7 @@ class HealthBridge(Star):
         if not self._monitor_runtime_enabled:
             return
         if self._in_quiet_hours():
-            logger.info("[health_bridge] 处于静默时段，跳过本次检测")
+            logger.info("[Xavier_care] 处于静默时段，跳过本次检测")
             return
 
         alerts = self.monitor.scan()
@@ -456,7 +479,7 @@ class HealthBridge(Star):
                     f"不要罗列数据、不要像健康报告。"
                 )
             except Exception:
-                logger.exception("[health_bridge] 注入关怀失败")
+                logger.exception("[Xavier_care] 注入关怀失败")
 
             via = "inject"
             if not ok:
@@ -465,19 +488,19 @@ class HealthBridge(Star):
                     sent = await self._send_direct(umo, fallback)
                     via = "fallback"
                     logger.info(
-                        f"[health_bridge] 注入失败，已用兜底文案直发: ok={sent}"
+                        f"[Xavier_care] 注入失败，已用兜底文案直发: ok={sent}"
                     )
                 else:
                     logger.warning(
-                        "[health_bridge] 注入失败且未配置兜底文案，已跳过本次推送"
+                        "[Xavier_care] 注入失败且未配置兜底文案，已跳过本次推送"
                     )
 
             self.monitor._mark(key)
             self._log_care(a, umo, ok, via=via)
             if ok:
-                logger.info(f"[health_bridge] 已推送健康关怀: {a['type']} via={via}")
+                logger.info(f"[Xavier_care] 已推送健康关怀: {a['type']} via={via}")
             else:
-                logger.warning(f"[health_bridge] 关怀注入失败，已跳过: {a['type']}")
+                logger.warning(f"[Xavier_care] 关怀注入失败，已跳过: {a['type']}")
 
             break
 
@@ -489,9 +512,9 @@ class HealthBridge(Star):
         try:
             removed = health_logic.cleanup_old(self._data_dir, retention)
             if removed:
-                logger.info(f"[health_bridge] 已清理 {len(removed)} 天过期数据")
+                logger.info(f"[Xavier_care] 已清理 {len(removed)} 天过期数据")
         except Exception:
-            logger.exception("[health_bridge] 清理过期数据时出错（不影响其他功能）")
+            logger.exception("[Xavier_care] 清理过期数据时出错（不影响其他功能）")
 
     async def _handle_dashboard(self, request: web.Request) -> web.Response:
         """返回 HTML 实时健康看板页面。"""
@@ -502,7 +525,7 @@ class HealthBridge(Star):
             content = html_path.read_text(encoding="utf-8")
             return web.Response(text=content, content_type="text/html", charset="utf-8")
         except Exception:
-            logger.exception("[health_bridge] 加载 dashboard 失败")
+            logger.exception("[Xavier_care] 加载 dashboard 失败")
             return web.Response(text="Internal Error", status=500)
 
     async def _handle_api_data(self, request: web.Request) -> web.Response:
@@ -512,11 +535,11 @@ class HealthBridge(Star):
             try:
                 data["period_status"] = health_logic.compute_period_status(self._data_dir)
             except Exception:
-                logger.exception("[health_bridge] 推算经期状态失败（不影响其余数据）")
+                logger.exception("[Xavier_care] 推算经期状态失败（不影响其余数据）")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             return web.json_response({"ok": True, "data": data, "server_time": now_str})
         except Exception:
-            logger.exception("[health_bridge] API 获取数据失败")
+            logger.exception("[Xavier_care] API 获取数据失败")
             return web.json_response({"ok": False, "error": "internal error"}, status=500)
 
     async def _handle_api_history(self, request: web.Request) -> web.Response:
@@ -537,7 +560,7 @@ class HealthBridge(Star):
                     continue
             return web.json_response({"ok": True, "weight": points})
         except Exception:
-            logger.exception("[health_bridge] API 历史数据失败")
+            logger.exception("[Xavier_care] API 历史数据失败")
             return web.json_response({"ok": False, "error": "internal error"}, status=500)
 
     async def _handle_api_period_month(self, request: web.Request) -> web.Response:
@@ -567,7 +590,7 @@ class HealthBridge(Star):
                 "period_status": health_logic.compute_period_status(self._data_dir),
             })
         except Exception:
-            logger.exception("[health_bridge] API 经期月视图失败")
+            logger.exception("[Xavier_care] API 经期月视图失败")
             return web.json_response({"ok": False, "error": "internal error"}, status=500)
 
     async def _handle_api_period_mark(self, request: web.Request) -> web.Response:
@@ -602,7 +625,7 @@ class HealthBridge(Star):
             tmp.write_text(text, encoding="utf-8")
             os.replace(tmp, target)
         except OSError:
-            logger.exception("[health_bridge] 写经期标记失败")
+            logger.exception("[Xavier_care] 写经期标记失败")
             return web.json_response({"ok": False, "error": "write failed"}, status=500)
 
         return web.json_response({"ok": True, "date": date_str, "in_period": True})
@@ -636,7 +659,7 @@ class HealthBridge(Star):
             tmp.write_text(text, encoding="utf-8")
             os.replace(tmp, target)
         except OSError:
-            logger.exception("[health_bridge] 取消经期标记失败")
+            logger.exception("[Xavier_care] 取消经期标记失败")
             return web.json_response({"ok": False, "error": "write failed"}, status=500)
 
         return web.json_response({"ok": True, "date": date_str, "removed": True})
@@ -668,7 +691,7 @@ class HealthBridge(Star):
                 return health_logic.format_for_date(self._data_dir, date.strip())
             return health_logic.format_latest(self._data_dir)
         except Exception:
-            logger.exception("[health_bridge] 读取身体数据时出错")
+            logger.exception("[Xavier_care] 读取身体数据时出错")
             return "读取身体数据时出错了。"
 
     # -- 指令入口 ----------------------------------------------------------
@@ -723,7 +746,7 @@ class HealthBridge(Star):
             return
 
         except Exception:
-            logger.exception("[health_bridge] 处理 /health 指令时出错")
+            logger.exception("[Xavier_care] 处理 /health 指令时出错")
             yield event.plain_result("操作出错了，详情见服务端日志。")
 
     # -- 各动作的输出 ------------------------------------------------------
@@ -807,7 +830,7 @@ class HealthBridge(Star):
         try:
             status = health_logic.compute_period_status(self._data_dir)
         except Exception:
-            logger.exception("[health_bridge] 推算经期状态失败")
+            logger.exception("[Xavier_care] 推算经期状态失败")
             return "[经期 / 周期状态]\n推算失败了，详情见日志。"
         lines = ["[经期 / 周期状态]"]
         if status.get("in_period"):

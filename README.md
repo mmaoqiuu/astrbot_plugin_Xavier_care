@@ -1,6 +1,6 @@
 # 小狗健康 (Puppy Health Bridge) · 小回的健康守护
 
-> 插件名: `astrbot_plugin_health_bridge`  
+> 插件名: `astrbot_plugin_Xavier_care`  
 > 目标版本: AstrBot **v4.25.1**+
 
 让 AstrBot 接入 iPhone 与 Apple Watch 的健康数据，开辟独立的 HTTP 数据通道。实时记录步数、心率、血氧、睡眠分期、活动状态、女性生理期及身体症状，并在日常对话中让小回自然了解你的身体状态，适时带来温柔的主动关怀。
@@ -45,7 +45,7 @@ Apple Watch / iPhone (健康数据)
 
 #### 1. 安装插件
 - **方式一（推荐）**：WebUI →「插件」→「上传 ZIP」安装。
-- **方式二（手动）**：将 `astrbot_plugin_health_bridge/` 文件夹放置在 AstrBot 根目录的 `data/plugins/` 目录下。
+- **方式二（手动）**：将 `astrbot_plugin_Xavier_care/` 文件夹放置在 AstrBot 根目录的 `data/plugins/` 目录下。
 
 #### 2. 防火墙放行端口
 接收端默认监听 `8787` 端口，需要在服务器防火墙与云服务商安全组中放行该 TCP 端口：
@@ -64,7 +64,7 @@ Apple Watch / iPhone (健康数据)
 
 ### 步骤二（AstrBot 面板）：填配置
 
-进入 AstrBot 管理面板 →「插件」→ `astrbot_plugin_health_bridge` →「配置」：
+进入 AstrBot 管理面板 →「插件」→ `astrbot_plugin_Xavier_care` →「配置」：
 
 #### 1. 基础配置
 
@@ -157,9 +157,9 @@ App Store 下载 **Health Auto Export – JSON+CSV**。此方式支持后台静�
 
 1. 手机触发一次同步，查看服务器后台日志，应打印：
    ```text
-   [health_bridge] 已接收并存储 2026-xx-xx 的数据
+   [Xavier_care] 已接收并存储 2026-xx-xx 的数据
    ```
-   检查 AstrBot 目录下 `data/plugin_data/astrbot_plugin_health_bridge/` 是否成功生成了对应日期的 `.json` 文件。
+   检查 AstrBot 目录下 `data/plugin_data/astrbot_plugin_Xavier_care/` 是否成功生成了对应日期的 `.json` 文件。
 2. 在私聊对话中发送指令验证：
    ```text
    /health              # 总览：主动关怀状态 + 经期状态
