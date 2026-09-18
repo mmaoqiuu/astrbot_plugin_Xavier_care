@@ -97,10 +97,17 @@ class HealthBridge(Star):
             self._data_dir.mkdir(parents=True, exist_ok=True)
             copied = 0
             for item in legacy.iterdir():
+                if not item.is_file():
+                    continue
                 target = self._data_dir / item.name
-                if item.is_file() and not target.exists():
-                    shutil.copy2(item, target)
-                    copied += 1
+                try:
+                    # 目标不存在，或旧目录里的文件更新（重启前手机又上报过），都需要复制
+                    if target.exists() and target.stat().st_mtime >= item.stat().st_mtime:
+                        continue
+                except OSError:
+                    continue
+                shutil.copy2(item, target)
+                copied += 1
             if copied:
                 logger.info(f"[Xavier_care] 已从旧目录 {LEGACY_DIR_NAME} 迁移 {copied} 个数据文件")
         except OSError:
