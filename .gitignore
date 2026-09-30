@@ -5,3 +5,4 @@ __pycache__/
 *.bak
 *.tmp
 /backup/
+/data/

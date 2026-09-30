@@ -1,5 +1,8 @@
 # Xavier_care/monitor.py
-"""基于按天 JSON 的健康异常检测 + 冷却控制。
+"""基于按天 JSON 的健康异常检测。
+
+这里只负责「有没有异常、异常是什么」，不负责「要不要推送」——
+推送节流（簇冷却 / 每日上限 / 最小间隔 / 对话互斥）统一在 care_guard.py。
 
 时区原则跟 health_logic.py 一致：不读服务器时钟，
 一律以「已存数据里最新的那天」为基准往前数。
@@ -10,7 +13,6 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -20,35 +22,9 @@ from . import health_logic
 
 
 class HealthMonitor:
-    def __init__(self, data_dir: Path, config, cooldown_path: Path):
+    def __init__(self, data_dir: Path, config):
         self.data_dir = data_dir
         self.config = config
-        self.cooldown_path = cooldown_path
-        self._cooldowns: dict[str, float] = self._load_cooldowns()
-
-    # ---------- 冷却持久化 ----------
-    def _load_cooldowns(self) -> dict:
-        try:
-            return json.loads(self.cooldown_path.read_text("utf-8"))
-        except Exception:
-            return {}
-
-    def _save_cooldowns(self) -> None:
-        try:
-            self.cooldown_path.write_text(
-                json.dumps(self._cooldowns), encoding="utf-8"
-            )
-        except Exception:
-            logger.exception("[Xavier_care] 写冷却状态失败")
-
-    def _in_cooldown(self, key: str) -> bool:
-        hours = float(self.config.get(f"cooldown_hours_{key}", 8))
-        last = self._cooldowns.get(key, 0)
-        return (datetime.now().timestamp() - last) < hours * 3600
-
-    def _mark(self, key: str) -> None:
-        self._cooldowns[key] = datetime.now().timestamp()
-        self._save_cooldowns()
 
     # ---------- 读数据 ----------
     def _load_by_date(self, date_str: str) -> dict | None:
@@ -187,7 +163,7 @@ class HealthMonitor:
         period = self._period_status()
         if self.config.get("rule_period_started", True):
             self._check_period_started(period, alerts)
-        if self.config.get("rule_period_daily", True):
+        if self._period_daily_care_enabled():
             self._check_period_daily(period, today, alerts)
         if self.config.get("rule_period_soon", True):
             self._check_period_soon(period, alerts)
@@ -205,7 +181,6 @@ class HealthMonitor:
             mean = sum(series) / len(series)
             alerts.append({
                 "type": "resting_hr_high",
-                "cooldown_key": "resting_hr_high",
                 "hint": (
                     f"她今天的静息心率 {val:.0f} bpm，"
                     f"比最近 {len(series)} 天平均（{mean:.0f} bpm）偏高不少。"
@@ -220,7 +195,6 @@ class HealthMonitor:
         if val < threshold:
             alerts.append({
                 "type": "spo2_low",
-                "cooldown_key": "spo2_low",
                 "hint": f"她今天的血氧只有 {val:.0f}%，低于平时，可能有点累或没休息好。",
             })
 
@@ -241,7 +215,6 @@ class HealthMonitor:
         if mean - dur >= float(self.config.get("sleep_short_min", 90)):
             alerts.append({
                 "type": "sleep_short",
-                "cooldown_key": "sleep_short",
                 "hint": (
                     f"她昨晚只睡了 {dur // 60} 小时 {dur % 60} 分，"
                     f"比平时少了大约 {(mean - dur) / 60:.1f} 小时。"
@@ -263,7 +236,6 @@ class HealthMonitor:
             hh, mm = divmod(minutes, 60)
             alerts.append({
                 "type": "late_night",
-                "cooldown_key": "late_night",
                 "hint": f"她昨晚 {hh:02d}:{mm:02d} 才睡，熬得有点晚。",
             })
 
@@ -309,7 +281,6 @@ class HealthMonitor:
         hh, mm = divmod(minutes, 60)
         alerts.append({
             "type": "late_night_realtime",
-            "cooldown_key": "late_night_realtime",
             "hint": (
                 f"现在是 {hh:02d}:{mm:02d}，她还没睡，"
                 f"心率 {int(latest)} bpm（静息 {int(resting)}），人还醒着。"
@@ -323,7 +294,6 @@ class HealthMonitor:
         if z is not None and z <= -float(self.config.get("hrv_z", 1.5)):
             alerts.append({
                 "type": "hrv_low",
-                "cooldown_key": "hrv_low",
                 "hint": (
                     f"她今天的 HRV 只有 {val:.0f} ms，"
                     f"比最近平均偏低，身体可能有点疲劳。"
@@ -365,14 +335,28 @@ class HealthMonitor:
 
         alerts.append({
             "type": "period_started",
-            "cooldown_key": "period_started",
             "hint": "她今天是经期第一天，身体容易累、肚子可能不舒服，特别怕凉，提醒她温水备好、别硬撑。",
         })
+
+    def _period_daily_care_enabled(self) -> bool:
+        """经期期间每天要不要推那一条体贴关怀。
+
+        配置键 period_daily_care（v1.9.0 起，在面板的推送闸门区）；
+        兼容 v1.8.0 的旧键 rule_period_daily——只在用户没改过新键时读取。
+        """
+        try:
+            value = self.config.get("period_daily_care")
+            if value is None:
+                value = self.config.get("rule_period_daily", True)
+            return bool(value)
+        except Exception:
+            logger.exception("[Xavier_care] 读「经期每日关怀」开关失败，本次按开启处理")
+            return True
 
     def _check_period_daily(self, period, today, alerts):
         """经期日常体贴关怀（覆盖经期第 1~N 天）。
 
-        - 每天最多关怀 1 次（按天/24小时冷却）。
+        - 每天最多关怀 1 次（由 care_guard 的「经期」簇冷却 20 小时保证）。
         - 结合当天步数：如果步数较高（例如 >= 7000），体现心疼她走太多路、让她躺好歇着。
         - 否则结合天数进行温馨关怀（如：今天第 X 天了，不许碰凉的，温水放身边）。
         """
@@ -400,7 +384,6 @@ class HealthMonitor:
 
         alerts.append({
             "type": "period_daily",
-            "cooldown_key": "period_daily",
             "hint": hint,
         })
 
@@ -446,7 +429,6 @@ class HealthMonitor:
 
         alerts.append({
             "type": "period_soon",
-            "cooldown_key": "period_soon",
             "hint": (
                 f"按她的周期推算，大约还有 {left} 天来经期，"
                 f"可以提醒她提前备着点、别贪凉。"

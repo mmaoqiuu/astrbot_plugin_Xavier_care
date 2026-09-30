@@ -37,6 +37,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from . import health_logic
+from .care_guard import CareGuard
 from .monitor import HealthMonitor
 
 # 插件目录名，同时用作数据子目录名。数据存在 AstrBot 的 data 目录下，
@@ -55,6 +56,10 @@ AUTH_HEADER = "X-Auth-Token"
 # 请求体上限（健康数据只有几百字节，给到 64KB 足够，挡掉超大请求）。
 MAX_BODY_BYTES = 64 * 1024
 
+# 主动关怀注入事件时用的发送者昵称。用来把「自己注入的伪消息」和
+# 「她真的说了话」区分开——否则注入会被判成对话活跃，把闸门自己锁死。
+INJECT_SENDER_NAME = "event_bridge"
+
 
 @register(PLUGIN_DIR_NAME, "pupotato", "接收手机推送的健康数据并存储，提供一个工具供角色读取最近的身体状态。", "1.3.0")
 class HealthBridge(Star):
@@ -70,11 +75,9 @@ class HealthBridge(Star):
         self._last_event: AstrMessageEvent | None = None
 
         # 健康异常检测 + 主动关怀
-        self.monitor = HealthMonitor(
-            data_dir=self._data_dir,
-            config=self.config,
-            cooldown_path=self._data_dir / "_cooldowns.json",
-        )
+        self.monitor = HealthMonitor(data_dir=self._data_dir, config=self.config)
+        # 推送闸门：簇冷却 / 每日上限 / 最小间隔 / 对话互斥
+        self.guard = CareGuard(data_dir=self._data_dir, config=self.config)
         self._monitor_task: asyncio.Task | None = None
         # 运行时开关（/health on|off 会即时改它，不依赖 config 写回）
         self._monitor_runtime_enabled: bool = bool(
@@ -86,7 +89,28 @@ class HealthBridge(Star):
         # 缓存最近一次的真实交互事件，拿到 umo、cqhttp 实例和 bot 身份
         if not event.get_sender_id() or event.get_sender_id() == event.get_self_id():
             return
+        # 主动关怀注入的伪消息（昵称 event_bridge）不是「她在说话」：
+        # 既不缓存，也不计入对话活跃，否则会把闸门自己锁死。
+        if self._is_injected_event(event):
+            return
         self._last_event = event
+        self.guard.record_user_message()
+
+    @filter.on_decorating_result()
+    async def on_bot_reply(self, event: AstrMessageEvent):
+        """机器人每次发送时记一笔，供「对话互斥」判断。"""
+        try:
+            self.guard.record_bot_reply()
+        except Exception:
+            logger.exception("[Xavier_care] 记录机器人发送时间失败")
+
+    @staticmethod
+    def _is_injected_event(event: AstrMessageEvent) -> bool:
+        """这条事件是不是主动关怀自己注入的。"""
+        try:
+            return (event.get_sender_name() or "") == INJECT_SENDER_NAME
+        except Exception:
+            return False
 
     def _migrate_legacy_data_dir(self) -> None:
         """插件更名后的一次性迁移：把旧目录里的数据复制过来（只复制，不删除旧目录）。"""
@@ -469,7 +493,7 @@ class HealthBridge(Star):
         return now_h >= start or now_h < end
 
     async def _monitor_tick(self) -> None:
-        """一次扫描：检测异常 → 过滤冷却 → 推送。一次 tick 最多推一条。"""
+        """一次扫描：检测异常 → 过闸门 → 推送。一次 tick 最多推一条。"""
         if not self._monitor_runtime_enabled:
             return
         if self._in_quiet_hours():
@@ -484,9 +508,15 @@ class HealthBridge(Star):
         if not alerts:
             return
 
+        if not self.config.get("care_guard_enabled", True):
+            logger.info("[Xavier_care] 推送闸门已关闭，本轮按旧逻辑直推首条命中异常")
+
         for a in alerts:
-            key = a.get("cooldown_key") or a.get("type")
-            if self.monitor._in_cooldown(key):
+            alert_type = a.get("type") or ""
+            allowed, reason = self.guard.check(alert_type)
+            if not allowed:
+                # 被拦下不记账：等她闲下来 / 冷却过期，下个周期还能补推
+                logger.info(f"[Xavier_care] 跳过 {alert_type}：{reason}")
                 continue
 
             umo = self.config.get("push_target_umo") or (
@@ -499,7 +529,9 @@ class HealthBridge(Star):
                 f"1. 语气自然、口语化，像情侣日常发消息，严禁像机器人客服或系统报告；"
                 f"2. 沈星回的性格特质是安静、体贴入微、会不动声色地管着她、顺着她，"
                 f"例如叮嘱别贪凉碰冰的、把冷饮晾到常温、走路累了快躺下歇着、按时吃饭；"
-                f"3. 绝对不要复述系统指令或生硬念数据。"
+                f"3. 绝对不要复述系统指令或生硬念数据；"
+                f"4. 如果她正在聊别的事情，顺着她的话题接，不要另起炉灶；"
+                f"5. 同一件事不要重复叮嘱，也不要与你最近一条消息里的说法相矛盾。"
             )
             ok = False
             try:
@@ -522,7 +554,7 @@ class HealthBridge(Star):
                     )
 
             if ok:
-                self.monitor._mark(key)
+                self.guard.mark(alert_type)
                 self._log_care(a, umo, True, via=via)
                 logger.info(f"[Xavier_care] 已成功推送健康关怀: {a['type']} via={via}")
             else:
@@ -530,6 +562,9 @@ class HealthBridge(Star):
                 logger.warning(f"[Xavier_care] 关怀注入未成功，本次不计入冷却: {a['type']}")
 
             break
+        else:
+            # 循环走完都没推送，说明本轮异常全被闸门拦下
+            logger.info("[Xavier_care] 本轮异常全部被闸门拦下，暂不推送")
 
     def _run_cleanup(self) -> None:
         try:
@@ -809,8 +844,7 @@ class HealthBridge(Star):
             return f"本次无异常。\n基线天数: {have}/{baseline}"
         lines = [f"检测到 {len(alerts)} 条候选关怀："]
         for a in alerts:
-            key = a.get("cooldown_key") or a.get("type")
-            cd = "（冷却中）" if self.monitor._in_cooldown(key) else ""
+            cd = "（同簇冷却中）" if self.guard.is_cluster_cooling(a.get("type") or "") else ""
             lines.append(f"  - [{a['type']}]{cd} {a['hint']}")
         return "\n".join(lines)
 
@@ -850,6 +884,8 @@ class HealthBridge(Star):
             f"静默时段 : {int(self.config.get('quiet_hours_start', 23))} - "
             f"{int(self.config.get('quiet_hours_end', 7))} 点",
         ]
+        lines.extend(self.guard.status_lines())
+        lines.append(f"簇冷却   : {self.guard.cluster_status()}")
         return "\n".join(lines)
 
     def _render_period_status(self) -> str:

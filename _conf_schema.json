@@ -53,6 +53,66 @@
     "default": 7,
     "hint": "这个点之前不推送关怀。"
   },
+  "care_guard_enabled": {
+    "description": "推送闸门总开关",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后按「簇冷却 + 每日上限 + 最小间隔 + 对话互斥」节流。关闭则哪条异常先命中就推哪条，不做任何节流。"
+  },
+  "daily_push_limit": {
+    "description": "每日推送上限（条）",
+    "type": "int",
+    "default": 2,
+    "hint": "一天最多主动推几条，经期簇不占用这个额度。写 0 表示不限。"
+  },
+  "min_push_interval_minutes": {
+    "description": "两条关怀最小间隔（分钟）",
+    "type": "int",
+    "default": 180,
+    "hint": "默认 180 分钟，避免一天里连续刷屏。写 0 表示不限制。"
+  },
+  "dialog_guard_minutes": {
+    "description": "对话互斥窗口（分钟）",
+    "type": "int",
+    "default": 5,
+    "hint": "最近这么多分钟内她说过话、或机器人刚回过她，就跳过本轮，避免插话抢话和说法自相矛盾。"
+  },
+  "period_daily_care": {
+    "description": "经期每日关怀（每天推一条）",
+    "type": "bool",
+    "default": true,
+    "hint": "开启：经期期间每天推一条体贴关怀给她（当天步数达到 period_daily_step_threshold 时，改成心疼她走太多路、叮嘱躺好歇着）。这条不占每日推送上限，额度与它无关。关闭：经期期间不再每天推，只保留「经期开始」和「临近经期」两条提醒。"
+  },
+  "group_cooldown_hours_sleep": {
+    "description": "「睡眠」簇冷却（小时）",
+    "type": "int",
+    "default": 12,
+    "hint": "包含：睡太少(sleep_short)、熬夜(late_night)。同簇任一条推过之后，这么久内不再推同簇关怀。"
+  },
+  "group_cooldown_hours_fatigue": {
+    "description": "「疲劳」簇冷却（小时）",
+    "type": "int",
+    "default": 12,
+    "hint": "包含：静息心率偏高、血氧偏低、HRV 偏低。"
+  },
+  "group_cooldown_hours_night": {
+    "description": "「夜间实时」簇冷却（小时）",
+    "type": "int",
+    "default": 2,
+    "hint": "包含：深夜还没睡且心率偏高(late_night_realtime)。是对当下行为的即时干预，冷却别太长。"
+  },
+  "group_cooldown_hours_period": {
+    "description": "「经期」簇冷却（小时）",
+    "type": "int",
+    "default": 20,
+    "hint": "包含：经期开始提醒、经期每日体贴。默认 20 小时＝一天最多一次，且不占用每日上限。"
+  },
+  "group_cooldown_hours_forecast": {
+    "description": "「经期预测」簇冷却（小时）",
+    "type": "int",
+    "default": 168,
+    "hint": "包含：临近经期倒计时提醒。默认 168 小时＝一周一次，避免「还有3天/2天/1天」连着刷屏。"
+  },
   "rule_resting_hr_high": {
     "description": "规则：静息心率偏高",
     "type": "bool",
@@ -137,65 +197,17 @@
     "default": 1.5,
     "hint": "比基线低多少个标准差算异常。默认 1.5。"
   },
-  "cooldown_hours_resting_hr_high": {
-    "description": "静息心率关怀冷却（小时）",
-    "type": "int",
-    "default": 24,
-    "hint": "同一条关怀推送后，多少小时内不再重复推。"
-  },
-  "cooldown_hours_spo2_low": {
-    "description": "血氧关怀冷却（小时）",
-    "type": "int",
-    "default": 24,
-    "hint": "同上。"
-  },
-  "cooldown_hours_sleep_short": {
-    "description": "睡眠关怀冷却（小时）",
-    "type": "int",
-    "default": 24,
-    "hint": "同上。"
-  },
-  "cooldown_hours_late_night": {
-    "description": "熬夜关怀冷却（小时）",
-    "type": "int",
-    "default": 24,
-    "hint": "同上。"
-  },
-  "cooldown_hours_late_night_realtime": {
-    "description": "实时熬夜关怀冷却（小时）",
-    "type": "int",
-    "default": 1,
-    "hint": "熬夜是持续行为，冷却别设太长，1 小时比较合适。"
-  },
-  "cooldown_hours_hrv_low": {
-    "description": "HRV 关怀冷却（小时）",
-    "type": "int",
-    "default": 24,
-    "hint": "同上。"
-  },
   "rule_period_started": {
     "description": "规则：经期开始关怀",
     "type": "bool",
     "default": true,
     "hint": "检测到「今天是经期第 1 天」时主动关怀一次。"
   },
-  "rule_period_daily": {
-    "description": "规则：经期期间每日关怀",
-    "type": "bool",
-    "default": true,
-    "hint": "经期期间每日关怀（不许贪凉、多喝温水；若当天步数多则心疼走累了让躺着揉腰）。"
-  },
   "period_daily_step_threshold": {
     "description": "经期步数过多阈值（步）",
     "type": "int",
     "default": 7000,
     "hint": "经期期间当天步数达到此值时，触发走累了躺好歇着的关怀。默认 7000。"
-  },
-  "cooldown_hours_period_daily": {
-    "description": "经期每日关怀冷却（小时）",
-    "type": "int",
-    "default": 24,
-    "hint": "每天最多提醒一次，默认 24 小时。"
   },
   "rule_period_soon": {
     "description": "规则：经期临近提醒",
@@ -214,18 +226,6 @@
     "type": "int",
     "default": 5,
     "hint": "最新数据超过这个天数就不提醒临近经期，避免她已经来了还在说「快来了」。"
-  },
-  "cooldown_hours_period_started": {
-    "description": "经期开始关怀冷却（小时）",
-    "type": "int",
-    "default": 168,
-    "hint": "默认 168 小时，保证一次经期只提醒一次。"
-  },
-  "cooldown_hours_period_soon": {
-    "description": "经期临近提醒冷却（小时）",
-    "type": "int",
-    "default": 168,
-    "hint": "默认 168 小时，同一个预测日只提醒一次。"
   },
   "fallback_care": {
     "description": "兜底关怀文案",
