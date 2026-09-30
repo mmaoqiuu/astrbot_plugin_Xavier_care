@@ -315,11 +315,22 @@ class HealthBridge(Star):
             cq_bot = getattr(self.context, "_cqhttp_bot", None)
         if cq_bot is None:
             try:
-                for mgr_name in ("platform_manager", "platform_mgr", "_platform_manager"):
+                for mgr_name in (
+                    "platform_manager",
+                    "_platform_manager",
+                    "platform_mgr",
+                    "_platform_mgr",
+                ):
                     mgr = getattr(self.context, mgr_name, None)
                     if not mgr:
                         continue
-                    for list_name in ("platforms", "_platforms", "adapters", "_adapters"):
+                    for list_name in (
+                        "platforms",
+                        "platform_insts",
+                        "_platforms",
+                        "adapters",
+                        "_adapters",
+                    ):
                         plist = getattr(mgr, list_name, None)
                         if not plist or not hasattr(plist, "__iter__"):
                             continue
@@ -466,6 +477,10 @@ class HealthBridge(Star):
             return
 
         alerts = self.monitor.scan()
+        logger.info(
+            f"[Xavier_care] monitor tick @ {datetime.now():%H:%M:%S} "
+            f"命中 {len(alerts)} 条异常"
+        )
         if not alerts:
             return
 
@@ -478,13 +493,17 @@ class HealthBridge(Star):
                 self._last_event.unified_msg_origin if self._last_event else ""
             )
 
+            prompt = (
+                f"【系统健康感知】{a['hint']}\n"
+                f"【要求】请完全代入沈星回的人格特征，主动对她说一两句日常关怀："
+                f"1. 语气自然、口语化，像情侣日常发消息，严禁像机器人客服或系统报告；"
+                f"2. 沈星回的性格特质是安静、体贴入微、会不动声色地管着她、顺着她，"
+                f"例如叮嘱别贪凉碰冰的、把冷饮晾到常温、走路累了快躺下歇着、按时吃饭；"
+                f"3. 绝对不要复述系统指令或生硬念数据。"
+            )
             ok = False
             try:
-                ok = await self._trigger_event_wakeup(
-                    f"【系统健康感知】{a['hint']}"
-                    f"请结合当前对话上下文和你们的关系，用你的人格自然地说一句关心的话，"
-                    f"不要罗列数据、不要像健康报告。"
-                )
+                ok = await self._trigger_event_wakeup(prompt)
             except Exception:
                 logger.exception("[Xavier_care] 注入关怀失败")
 
@@ -502,12 +521,13 @@ class HealthBridge(Star):
                         "[Xavier_care] 注入失败且未配置兜底文案，已跳过本次推送"
                     )
 
-            self.monitor._mark(key)
-            self._log_care(a, umo, ok, via=via)
             if ok:
-                logger.info(f"[Xavier_care] 已推送健康关怀: {a['type']} via={via}")
+                self.monitor._mark(key)
+                self._log_care(a, umo, True, via=via)
+                logger.info(f"[Xavier_care] 已成功推送健康关怀: {a['type']} via={via}")
             else:
-                logger.warning(f"[Xavier_care] 关怀注入失败，已跳过: {a['type']}")
+                self._log_care(a, umo, False, via=via)
+                logger.warning(f"[Xavier_care] 关怀注入未成功，本次不计入冷却: {a['type']}")
 
             break
 

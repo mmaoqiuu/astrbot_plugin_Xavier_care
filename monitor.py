@@ -3,8 +3,10 @@
 
 时区原则跟 health_logic.py 一致：不读服务器时钟，
 一律以「已存数据里最新的那天」为基准往前数。
-例外：实时熬夜判定用 current_time（接收端写入的 HH:MM），
+例外一：实时熬夜判定用 current_time（接收端写入的 HH:MM），
 只用于「此刻是不是深夜」，不参与日期/过期判断。
+例外二：经期「临近提醒」与「第一天提醒」用真实日历做新鲜度判断，
+只决定要不要提醒，不写回数据、不参与归档与过期判断。
 """
 from __future__ import annotations
 
@@ -181,6 +183,18 @@ class HealthMonitor:
         if self.config.get("rule_late_night_realtime", True):
             self._check_late_night_realtime(today, alerts)
 
+        # --- 经期规则（由历史 in_period 标记推算，不依赖今天的传感器数据）---
+        period = self._period_status()
+        if self.config.get("rule_period_started", True):
+            self._check_period_started(period, alerts)
+        if self.config.get("rule_period_daily", True):
+            self._check_period_daily(period, today, alerts)
+        if self.config.get("rule_period_soon", True):
+            self._check_period_soon(period, alerts)
+
+        # --- 经期语境增强：不新增触发点，只让已命中的提示更贴合语境 ---
+        self._apply_period_context(period, alerts)
+
         return alerts
 
     def _check_resting_hr(self, today, history, alerts):
@@ -315,3 +329,145 @@ class HealthMonitor:
                     f"比最近平均偏低，身体可能有点疲劳。"
                 ),
             })
+
+    # ---------- 经期 ----------
+    def _period_status(self) -> dict | None:
+        """推算经期状态。失败或数据不足返回 None，不影响其他规则。"""
+        try:
+            return health_logic.compute_period_status(self.data_dir)
+        except Exception:
+            logger.exception("[Xavier_care] 推算经期状态失败，本次跳过经期规则")
+            return None
+
+    def _data_lag_days(self) -> int | None:
+        """最新数据日期距真实今天几天；无数据/格式异常返回 None。"""
+        latest = self._latest_date()
+        if not latest:
+            return None
+        try:
+            d = datetime.strptime(latest, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        return (datetime.now().date() - d).days
+
+    def _check_period_started(self, period, alerts):
+        """今天是这次经期的第一天。"""
+        if not period:
+            return
+        if not period.get("in_period") or period.get("period_day") != 1:
+            return
+
+        # 陈旧保险：只有「今天」的数据就是最新一天时才提醒，
+        # 否则插件离线几天后重启，会对着一份旧数据说「今天是第一天」。
+        lag = self._data_lag_days()
+        if lag is None or not 0 <= lag <= 1:
+            return
+
+        alerts.append({
+            "type": "period_started",
+            "cooldown_key": "period_started",
+            "hint": "她今天是经期第一天，身体容易累、肚子可能不舒服，特别怕凉，提醒她温水备好、别硬撑。",
+        })
+
+    def _check_period_daily(self, period, today, alerts):
+        """经期日常体贴关怀（覆盖经期第 1~N 天）。
+
+        - 每天最多关怀 1 次（按天/24小时冷却）。
+        - 结合当天步数：如果步数较高（例如 >= 7000），体现心疼她走太多路、让她躺好歇着。
+        - 否则结合天数进行温馨关怀（如：今天第 X 天了，不许碰凉的，温水放身边）。
+        """
+        if not period or not period.get("in_period"):
+            return
+
+        lag = self._data_lag_days()
+        if lag is None or not 0 <= lag <= 1:
+            return
+
+        period_day = period.get("period_day") or 1
+        steps = today.get("steps")
+
+        high_step_thresh = int(self.config.get("period_daily_step_threshold", 7000))
+        if steps is not None and steps >= high_step_thresh:
+            hint = (
+                f"她正在经期第 {period_day} 天，而且今天已经走了 {steps} 步，"
+                f"身体容易酸胀疲倦，提醒她快坐下或躺着歇歇，别走那么多路，揉揉腰。"
+            )
+        else:
+            hint = (
+                f"她正在经期第 {period_day} 天，"
+                f"顺口叮嘱她温水常备，凉的放旁边晾着等放常温再喝，别碰冰的，多注意休息。"
+            )
+
+        alerts.append({
+            "type": "period_daily",
+            "cooldown_key": "period_daily",
+            "hint": hint,
+        })
+
+    def _check_period_soon(self, period, alerts):
+        """距预测经期还剩几天。
+
+        这里刻意用真实日历（服务器时钟）算「还剩几天」，而不是用最新
+        数据日期：手机断更时数据日期会滞后，用它必然漏提醒。这条只
+        决定要不要提醒，不写回数据，也不参与归档/过期判断。
+        """
+        if not period:
+            return
+        if period.get("in_period"):
+            return
+
+        # 至少要有两次经期段，平均周期才有依据；
+        # 只有一次时 next_start_date 只是拿默认周期推的，不可信。
+        if int(period.get("period_count") or 0) < 2:
+            return
+
+        next_start = period.get("next_start_date")
+        if not next_start:
+            return
+        try:
+            next_d = datetime.strptime(next_start, "%Y-%m-%d").date()
+        except ValueError:
+            return
+
+        left = (next_d - datetime.now().date()).days
+        window = int(self.config.get("period_soon_days", 2))
+        if not 1 <= left <= window:
+            return
+
+        # 陈旧保险：数据太旧就不提醒，避免她已经来了、我们还在说「快来了」。
+        lag = self._data_lag_days()
+        stale_limit = int(self.config.get("period_soon_max_stale_days", 5))
+        if lag is None or not 0 <= lag <= stale_limit:
+            logger.info(
+                f"[Xavier_care] 经期临近提醒跳过：最新数据距今 {lag} 天，"
+                f"超出陈旧上限 {stale_limit} 天"
+            )
+            return
+
+        alerts.append({
+            "type": "period_soon",
+            "cooldown_key": "period_soon",
+            "hint": (
+                f"按她的周期推算，大约还有 {left} 天来经期，"
+                f"可以提醒她提前备着点、别贪凉。"
+            ),
+        })
+
+    def _apply_period_context(self, period, alerts) -> None:
+        """经期语境增强：已命中其他规则时，补一句经期状态。
+
+        只改措辞、不新增触发点，因此不会带来任何额外误报。
+        """
+        if not alerts or not period:
+            return
+        day = period.get("period_day") if period.get("in_period") else None
+        if not day:
+            return
+        tag = f"（她正在经期第 {day} 天）"
+        for a in alerts:
+            # 经期规则自己的提示不必再叠一层经期语境
+            if str(a.get("type", "")).startswith("period_"):
+                continue
+            hint = a.get("hint")
+            if isinstance(hint, str) and not hint.startswith(tag):
+                a["hint"] = tag + hint

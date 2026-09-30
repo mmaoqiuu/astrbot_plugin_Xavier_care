@@ -517,6 +517,7 @@ def compute_period_status(data_dir: Path, default_cycle: int = 28) -> dict:
         "days_to_next": int|None,   # 距下次预测经期还有几天
         "avg_cycle": int,           # 平均周期（不足历史时用 default_cycle）
         "avg_length": int,          # 平均经期长度（不足历史时用 5）
+        "period_count": int,        # 历史上识别出的经期段数（用于判断周期是否可信）
       }
 
     注意：`next_start_date` / `days_to_next` 任何时候都会算——即使今天在经期，
@@ -527,7 +528,7 @@ def compute_period_status(data_dir: Path, default_cycle: int = 28) -> dict:
         return {
             "in_period": False, "period_day": None, "last_start": None,
             "next_start_date": None, "days_to_next": None,
-            "avg_cycle": default_cycle, "avg_length": 5,
+            "avg_cycle": default_cycle, "avg_length": 5, "period_count": 0,
         }
 
     # 收集所有「在经期」的日期（升序）
@@ -541,7 +542,7 @@ def compute_period_status(data_dir: Path, default_cycle: int = 28) -> dict:
         return {
             "in_period": False, "period_day": None, "last_start": None,
             "next_start_date": None, "days_to_next": None,
-            "avg_cycle": default_cycle, "avg_length": 5,
+            "avg_cycle": default_cycle, "avg_length": 5, "period_count": 0,
         }
 
     # 把连续的经期天分段（每段 = 一次经期）
@@ -608,6 +609,7 @@ def compute_period_status(data_dir: Path, default_cycle: int = 28) -> dict:
         "days_to_next": days_to_next,
         "avg_cycle": avg_cycle,
         "avg_length": avg_length,
+        "period_count": len(segments),
     }
 
 

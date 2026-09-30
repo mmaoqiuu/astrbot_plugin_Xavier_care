@@ -173,6 +173,60 @@
     "default": 24,
     "hint": "同上。"
   },
+  "rule_period_started": {
+    "description": "规则：经期开始关怀",
+    "type": "bool",
+    "default": true,
+    "hint": "检测到「今天是经期第 1 天」时主动关怀一次。"
+  },
+  "rule_period_daily": {
+    "description": "规则：经期期间每日关怀",
+    "type": "bool",
+    "default": true,
+    "hint": "经期期间每日关怀（不许贪凉、多喝温水；若当天步数多则心疼走累了让躺着揉腰）。"
+  },
+  "period_daily_step_threshold": {
+    "description": "经期步数过多阈值（步）",
+    "type": "int",
+    "default": 7000,
+    "hint": "经期期间当天步数达到此值时，触发走累了躺好歇着的关怀。默认 7000。"
+  },
+  "cooldown_hours_period_daily": {
+    "description": "经期每日关怀冷却（小时）",
+    "type": "int",
+    "default": 24,
+    "hint": "每天最多提醒一次，默认 24 小时。"
+  },
+  "rule_period_soon": {
+    "description": "规则：经期临近提醒",
+    "type": "bool",
+    "default": true,
+    "hint": "距预测经期仅剩几天时提醒一次。需至少两次经期记录，周期才有依据。"
+  },
+  "period_soon_days": {
+    "description": "经期提前提醒天数",
+    "type": "int",
+    "default": 2,
+    "hint": "距预测经期还剩几天时开始提醒，填 2 表示提前 2 天。"
+  },
+  "period_soon_max_stale_days": {
+    "description": "经期提醒的数据陈旧上限（天）",
+    "type": "int",
+    "default": 5,
+    "hint": "最新数据超过这个天数就不提醒临近经期，避免她已经来了还在说「快来了」。"
+  },
+  "cooldown_hours_period_started": {
+    "description": "经期开始关怀冷却（小时）",
+    "type": "int",
+    "default": 168,
+    "hint": "默认 168 小时，保证一次经期只提醒一次。"
+  },
+  "cooldown_hours_period_soon": {
+    "description": "经期临近提醒冷却（小时）",
+    "type": "int",
+    "default": 168,
+    "hint": "默认 168 小时，同一个预测日只提醒一次。"
+  },
   "fallback_care": {
     "description": "兜底关怀文案",
     "type": "string",
