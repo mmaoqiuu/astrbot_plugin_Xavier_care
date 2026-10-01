@@ -254,6 +254,35 @@
     .modal .btn-mark { background: linear-gradient(135deg, #f48fb1, #f06292); color: #fff; }
     .modal .btn-unmark { background: #f3eeff; color: #7d63c4; border: 1px solid #e4daff; }
     .modal .btn-cancel { background: #f7f7fa; color: #8b86a3; margin-bottom: 0; }
+    /* 奶茶日历 */
+    .cal-cell.mt-hit { background: #f6efff; border-radius: 10px; }
+    .mt-count {
+      font-size: 9px; line-height: 1.3; color: #fff; background: #c08ad4;
+      border-radius: 8px; padding: 0 5px; margin-top: 2px;
+    }
+    .mt-empty { font-size: 12px; color: #b0a6c4; text-align: center; padding: 14px 0; }
+    .mt-item { background: #faf7ff; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; text-align: left; }
+    .mt-item .mt-head { font-size: 14px; font-weight: 600; color: #3a2f57; overflow: hidden; }
+    .mt-item .mt-meta { font-size: 12px; color: #7d63c4; margin-top: 4px; }
+    .mt-item .mt-note { font-size: 12px; color: #6b6280; margin-top: 5px; line-height: 1.5; }
+    .mt-del { float: right; font-size: 11px; color: #b47ba8; background: #fff;
+      border: 1px solid #eadff5; border-radius: 8px; padding: 2px 8px; cursor: pointer; font-family: inherit; }
+    .mt-form { display: none; text-align: left; margin-top: 10px; }
+    .mt-form.show { display: block; }
+    .mt-form input, .mt-form select {
+      width: 100%; box-sizing: border-box; margin-bottom: 7px; padding: 8px 10px;
+      border: 1px solid #e6dcf5; border-radius: 10px; font-size: 13px;
+      font-family: inherit; color: #3a2f57; background: #fff;
+    }
+    .mt-row2 { display: flex; gap: 7px; }
+    .mt-row2 input, .mt-row2 select { flex: 1; min-width: 0; }
+    .mt-add { width: 100%; margin-top: 8px; padding: 9px; border-radius: 12px;
+      border: 1px dashed #d9c7ff; background: #faf7ff; color: #7d63c4;
+      font-size: 13px; font-family: inherit; cursor: pointer; }
+    .mt-submit { width: 100%; padding: 10px; border: none; border-radius: 12px;
+      cursor: pointer; background: #9c7bff; color: #fff; font-size: 14px; font-family: inherit; }
+    .mt-sub { font-size: 11px; color: #a99cc2; text-align: center; margin-top: 10px; }
+
   </style>
 </head>
 <body>
@@ -370,6 +399,19 @@
         </div>
         <div class="card-subtext" id="weightSummary" style="margin-top:10px;">加载中…</div>
       </div>
+
+      <div class="cal-card" style="margin-top:14px;">
+        <div class="cal-nav">
+          <button onclick="mtPrevMonth()">‹</button>
+          <div class="month" id="mtMonthLabel">--</div>
+          <button onclick="mtNextMonth()">›</button>
+        </div>
+        <div class="cal-week">
+          <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+        </div>
+        <div class="cal-grid" id="mtGrid"></div>
+        <div class="mt-sub" id="mtSummary"></div>
+      </div>
     </div>
 
     <!-- ====== 日历 ====== -->
@@ -417,6 +459,38 @@
     </div>
   </div>
 
+  <!-- 奶茶弹窗 -->
+  <div class="modal-mask" id="mtMask" onclick="if(event.target===this) closeMtModal()">
+    <div class="modal">
+      <h3>奶茶记录</h3>
+      <div class="date-str" id="mtDateStr">--</div>
+      <div id="mtList"></div>
+      <button class="mt-add" id="mtAddBtn" onclick="mtToggleForm()">＋ 补记一条</button>
+      <div class="mt-form" id="mtForm">
+        <div class="mt-row2">
+          <input id="mtBrand" placeholder="品牌，如 霸王茶姬">
+          <input id="mtName" placeholder="饮品，如 伯牙绝弦">
+        </div>
+        <div class="mt-row2">
+          <input id="mtSugar" placeholder="甜度，如 三分糖">
+          <input id="mtIce" placeholder="冰量，如 少冰">
+        </div>
+        <input id="mtToppings" placeholder="加料，如 珍珠、奶盖（可空）">
+        <select id="mtRating">
+          <option value="">不评分</option>
+          <option value="1">★1</option>
+          <option value="2">★2</option>
+          <option value="3">★3</option>
+          <option value="4">★4</option>
+          <option value="5">★5</option>
+        </select>
+        <input id="mtNote" placeholder="点评（可空）">
+        <button class="mt-submit" onclick="mtSubmit()">记下这一杯</button>
+      </div>
+      <button class="btn-cancel" onclick="closeMtModal()">关闭</button>
+    </div>
+  </div>
+
   <script>
     let weightChart = null;
     let currentView = "today";
@@ -432,7 +506,7 @@
       document.getElementById("weightView").style.display = view === "weight" ? "block" : "none";
       document.getElementById("calendarView").style.display = view === "calendar" ? "block" : "none";
 
-      if (view === "weight") loadWeightChart();
+      if (view === "weight") { loadWeightChart(); loadMtMonth(); }
       if (view === "calendar") loadCalendar();
     }
 
@@ -706,6 +780,214 @@
     }
 
     // ========== 弹窗 ==========
+    // ========== 奶茶日历 ==========
+    let mtYear = new Date().getFullYear();
+    let mtMonth = new Date().getMonth() + 1;
+    let mtDays = {};
+    let mtSelected = "";
+
+    // 后端只回错误码，这里翻成人话
+    const MT_ERR = {
+      "bad date": "日期不对",
+      "future date": "这天还没到，不能提前记账",
+      "rejected": "品牌和饮品名至少填一个",
+      "not found": "没找到这条",
+      "bad json": "内容格式不对"
+    };
+    function mtErr(res) {
+      return (res && MT_ERR[res.error]) || "没成功，稍后再试";
+    }
+
+    function mtToday() {
+      const t = new Date();
+      return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    }
+
+    async function loadMtMonth() {
+      document.getElementById("mtMonthLabel").textContent = `${mtYear}年${mtMonth}月`;
+      const ym = `${mtYear}-${String(mtMonth).padStart(2, "0")}`;
+      const summary = document.getElementById("mtSummary");
+      try {
+        const resp = await fetch(`/health/api/milktea/month?ym=${ym}&t=` + Date.now());
+        const res = await resp.json();
+        mtDays = (res && res.ok && res.days) ? res.days : {};
+        renderMtCalendar();
+        const total = Object.values(mtDays).reduce((a, b) => a + b, 0);
+        summary.textContent = total
+          ? `本月 ${total} 杯 · 最常喝：${res.favorite || "—"}`
+          : "本月还没有记录";
+      } catch (e) {
+        console.error("加载奶茶数据失败", e);
+        mtDays = {};
+        renderMtCalendar();
+        summary.textContent = "加载失败，稍后再看";
+      }
+    }
+
+    function renderMtCalendar() {
+      const grid = document.getElementById("mtGrid");
+      grid.innerHTML = "";
+      const firstDay = new Date(mtYear, mtMonth - 1, 1).getDay();
+      const daysInMonth = new Date(mtYear, mtMonth, 0).getDate();
+      const todayStr = mtToday();
+
+      for (let i = 0; i < firstDay; i++) {
+        grid.appendChild(Object.assign(document.createElement("div"), { className: "cal-cell" }));
+      }
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${mtYear}-${String(mtMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        const cell = document.createElement("div");
+        cell.className = "cal-cell";
+        if (dateStr === todayStr) cell.classList.add("today");
+        cell.style.cursor = "pointer";
+        const num = document.createElement("span");
+        num.textContent = d;
+        cell.appendChild(num);
+        const n = mtDays[dateStr] || 0;
+        if (n > 0) {
+          cell.classList.add("mt-hit");
+          const badge = document.createElement("div");
+          badge.className = "mt-count";
+          badge.textContent = n > 1 ? `${n}杯` : "🧋";
+          cell.appendChild(badge);
+        }
+        cell.onclick = () => openMtDay(dateStr);
+        grid.appendChild(cell);
+      }
+    }
+
+    function mtPrevMonth() {
+      mtMonth--; if (mtMonth < 1) { mtMonth = 12; mtYear--; }
+      loadMtMonth();
+    }
+
+    function mtNextMonth() {
+      mtMonth++; if (mtMonth > 12) { mtMonth = 1; mtYear++; }
+      loadMtMonth();
+    }
+
+    async function openMtDay(dateStr) {
+      mtSelected = dateStr;
+      document.getElementById("mtDateStr").textContent = dateStr;
+      document.getElementById("mtForm").classList.remove("show");
+      document.getElementById("mtMask").classList.add("show");
+      await mtRenderList();
+    }
+
+    async function mtRenderList() {
+      const box = document.getElementById("mtList");
+      box.innerHTML = "<div class='mt-empty'>加载中…</div>";
+      try {
+        const resp = await fetch(`/health/api/milktea/day?date=${mtSelected}&t=` + Date.now());
+        const res = await resp.json();
+        const items = (res && res.ok && Array.isArray(res.items)) ? res.items : [];
+        box.innerHTML = "";
+        if (!items.length) {
+          box.innerHTML = "<div class='mt-empty'>这天没有记录</div>";
+          return;
+        }
+        items.forEach(it => box.appendChild(mtRenderItem(it)));
+      } catch (e) {
+        console.error("加载当天奶茶失败", e);
+        box.innerHTML = "<div class='mt-empty'>加载失败</div>";
+      }
+    }
+
+    function mtRenderItem(it) {
+      const wrap = document.createElement("div");
+      wrap.className = "mt-item";
+
+      const head = document.createElement("div");
+      head.className = "mt-head";
+      head.textContent = [it.brand, it.name].filter(Boolean).join(" · ") || "（未命名）";
+      const del = document.createElement("button");
+      del.className = "mt-del";
+      del.textContent = "删除";
+      del.onclick = () => mtDelete(it.id);
+      head.appendChild(del);
+      wrap.appendChild(head);
+
+      // 没填评分 -> 这一行不出现星星（不显示空星，也不显示 0 分）
+      const meta = [
+        it.sugar_text,
+        it.ice,
+        (Array.isArray(it.toppings) && it.toppings.length) ? "加" + it.toppings.join("、") : "",
+        it.rating ? "★".repeat(it.rating) : ""
+      ].filter(Boolean).join(" · ");
+      if (meta) {
+        const m = document.createElement("div");
+        m.className = "mt-meta";
+        m.textContent = meta;
+        wrap.appendChild(m);
+      }
+      if (it.note) {
+        const nt = document.createElement("div");
+        nt.className = "mt-note";
+        nt.textContent = `「${it.note}」`;
+        wrap.appendChild(nt);
+      }
+      return wrap;
+    }
+
+    function mtToggleForm() {
+      document.getElementById("mtForm").classList.toggle("show");
+    }
+
+    async function mtSubmit() {
+      const val = id => document.getElementById(id).value.trim();
+      const brand = val("mtBrand"), name = val("mtName");
+      if (!brand && !name) { alert("品牌和饮品名至少填一个"); return; }
+      if (mtSelected > mtToday()) { alert("这天还没到，不能提前记账"); return; }
+      const body = {
+        date: mtSelected, brand, name,
+        sugar_text: val("mtSugar"), ice: val("mtIce"),
+        toppings: val("mtToppings"),
+        rating: val("mtRating") || null,
+        note: val("mtNote")
+      };
+      try {
+        const resp = await fetch("/health/api/milktea/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const res = await resp.json();
+        if (!res.ok) { alert(mtErr(res)); return; }
+        ["mtBrand", "mtName", "mtSugar", "mtIce", "mtToppings", "mtNote"].forEach(i => {
+          document.getElementById(i).value = "";
+        });
+        document.getElementById("mtRating").value = "";
+        document.getElementById("mtForm").classList.remove("show");
+        await mtRenderList();
+        await loadMtMonth();
+      } catch (e) {
+        console.error("补记失败", e);
+        alert("补记失败，没连上服务");
+      }
+    }
+
+    async function mtDelete(id) {
+      if (!confirm("删掉这一条？")) return;
+      try {
+        const resp = await fetch("/health/api/milktea/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date: mtSelected, id })
+        });
+        const res = await resp.json();
+        if (!res.ok) { alert(mtErr(res)); return; }
+        await mtRenderList();
+        await loadMtMonth();
+      } catch (e) {
+        console.error("删除失败", e);
+        alert("删除失败");
+      }
+    }
+
+    function closeMtModal() {
+      document.getElementById("mtMask").classList.remove("show");
+    }
+
     function openModal(dateStr) {
       selectedDate = dateStr;
       document.getElementById("modalDate").textContent = dateStr;

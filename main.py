@@ -31,12 +31,14 @@ from pathlib import Path
 
 from aiohttp import web
 
+
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from . import health_logic
+from . import chat_care, health_logic, milktea
 from .care_guard import CareGuard
 from .monitor import HealthMonitor
 
@@ -61,7 +63,7 @@ MAX_BODY_BYTES = 64 * 1024
 INJECT_SENDER_NAME = "event_bridge"
 
 
-@register(PLUGIN_DIR_NAME, "pupotato", "接收手机推送的健康数据并存储，提供一个工具供角色读取最近的身体状态。", "1.3.0")
+@register(PLUGIN_DIR_NAME, "pupotato", "接收手机推送的健康数据并存储，提供一个工具供角色读取最近的身体状态。", "1.9.1")
 class HealthBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -78,6 +80,12 @@ class HealthBridge(Star):
         self.monitor = HealthMonitor(data_dir=self._data_dir, config=self.config)
         # 推送闸门：簇冷却 / 每日上限 / 最小间隔 / 对话互斥
         self.guard = CareGuard(data_dir=self._data_dir, config=self.config)
+        # 聊天内自然关怀：她说话时把「可以顺口提一句」的要点软注入本轮提示
+        self.chat_care = chat_care.ChatCareInjector(
+            data_dir=self._data_dir, config=self.config
+        )
+        # monitor.scan() 的短时缓存（她连发几条消息时避免重复读盘）
+        self._chat_scan_cache: tuple[float, list] = (0.0, [])
         self._monitor_task: asyncio.Task | None = None
         # 运行时开关（/health on|off 会即时改它，不依赖 config 写回）
         self._monitor_runtime_enabled: bool = bool(
@@ -99,10 +107,110 @@ class HealthBridge(Star):
     @filter.on_decorating_result()
     async def on_bot_reply(self, event: AstrMessageEvent):
         """机器人每次发送时记一笔，供「对话互斥」判断。"""
+        if not await self._is_session_enabled(event):
+            return
         try:
             self.guard.record_bot_reply()
         except Exception:
             logger.exception("[Xavier_care] 记录机器人发送时间失败")
+
+    @filter.on_llm_request()
+    async def on_llm_request(
+        self, event: AstrMessageEvent, req: ProviderRequest
+    ) -> None:
+        """聊天内自然关怀：把「今天可以顺口提一句」的要点软注入本轮系统提示。
+
+        与主动推送的区别（也是它存在的理由）：
+        - 不新增任何消息，所以她说话时「顺口关心」不会和她的对话撞车；
+        - 不占每日额度、不计冷却、不参与「对话互斥」，因此不会把主动推送
+          的额度提前吃掉；
+        - 提示词里明确写了「可以完全不提」，是否开口交给角色自己判断。
+        """
+        if not await self._is_session_enabled(event):
+            return
+        if self._is_injected_event(event):
+            # 主动推送自己注入的伪消息：那条提示词里已经带好关怀内容，
+            # 再叠一层会变成「对着自己的指令回复」。
+            return
+        if not self.chat_care.enabled:
+            return
+        try:
+            text, used = self.chat_care.render(
+                alerts=self._chat_alerts(),
+                period=self._period_snapshot(),
+            )
+            if text:
+                req.system_prompt += "\n\n" + text
+                logger.info(
+                    "[Xavier_care] 已注入聊天内关怀："
+                    f"{('要点 ' + ', '.join(used)) if used else '仅经期语境'}"
+                )
+        except Exception:
+            logger.exception("[Xavier_care] 注入聊天内关怀失败（不影响本轮回复）")
+
+    async def _is_session_enabled(self, event: AstrMessageEvent) -> bool:
+        """会话级插件被禁用时，钩子必须完全不执行。
+
+        AstrBot 自身也会过滤，但这里再判一次：钩子里要写状态文件、要注入
+        提示词，宁可靠自己确认一遍，也别在被禁用的会话里留下痕迹。
+        """
+        try:
+            from astrbot.core.star.session_plugin_manager import SessionPluginManager
+
+            return await SessionPluginManager.is_plugin_enabled_for_session(
+                session_id=event.get_session_id(),
+                plugin_name=getattr(self, "name", "") or PLUGIN_DIR_NAME,
+            )
+        except Exception:
+            # 判断不出来按启用处理：宁可多关心一句，也不要静默失效
+            return True
+
+    def _chat_alerts(self) -> list:
+        """给聊天注入用的异常列表，带 60 秒缓存。
+
+        monitor.scan() 要读今天的数据文件加近几天基线；她连发几条消息就会
+        连着触发几次 LLM 请求，缓存一下省掉重复 IO（也避免日志刷屏）。
+        """
+        now = time.time()
+        ts, cached = self._chat_scan_cache
+        if cached and (now - ts) < 60:
+            return cached
+        try:
+            alerts = self.monitor.scan()
+        except Exception:
+            logger.exception("[Xavier_care] 聊天内关怀扫描异常，本轮按无异常处理")
+            alerts = []
+        self._chat_scan_cache = (now, alerts)
+        return alerts
+
+    def _period_snapshot(self) -> dict:
+        """经期状态快照，供语境行使用。失败就返回空字典（跳过语境行）。"""
+        try:
+            return health_logic.compute_period_status(self._data_dir)
+        except Exception:
+            logger.exception("[Xavier_care] 推算经期状态失败（跳过语境行）")
+            return {}
+
+    def _skip_because_talked_today(self, alert_type: str) -> bool:
+        """反向去重：聊天里已经顺口提过的要点，当天不再单独推一条。
+
+        「提过」用「已注入」近似——我们没法判断模型有没有真的说出口，
+        所以按提过处理，宁少不重复。开关 chat_hint_dedup_push（默认开）。
+        """
+        try:
+            if not bool(self.config.get("chat_hint_dedup_push", True)):
+                return False
+        except Exception:
+            return False
+        try:
+            if alert_type in self.chat_care.mentioned_types_today():
+                logger.info(
+                    f"[Xavier_care] 跳过 {alert_type}：今天聊天里已经顺口提过"
+                )
+                return True
+        except Exception:
+            logger.exception("[Xavier_care] 查聊天内关怀记录失败，本次照常推送")
+        return False
 
     @staticmethod
     def _is_injected_event(event: AstrMessageEvent) -> bool:
@@ -212,6 +320,10 @@ class HealthBridge(Star):
             app.router.add_post("/health/api/period/mark", self._handle_api_period_mark)
             app.router.add_post("/health/api/period/unmark", self._handle_api_period_unmark)
             # 静态资源（图标/装饰图），文件放插件目录下的 assets/
+            app.router.add_get("/health/api/milktea/month", self._handle_api_milktea_month)
+            app.router.add_get("/health/api/milktea/day", self._handle_api_milktea_day)
+            app.router.add_post("/health/api/milktea/add", self._handle_api_milktea_add)
+            app.router.add_post("/health/api/milktea/delete", self._handle_api_milktea_delete)
             app.router.add_get("/health/assets/{name}", self._handle_asset)
             runner = web.AppRunner(app)
             await runner.setup()
@@ -513,6 +625,9 @@ class HealthBridge(Star):
 
         for a in alerts:
             alert_type = a.get("type") or ""
+            # 反向去重：今天聊天里已经顺口提过的，不再单独推一条
+            if self._skip_because_talked_today(alert_type):
+                continue
             allowed, reason = self.guard.check(alert_type)
             if not allowed:
                 # 被拦下不记账：等她闲下来 / 冷却过期，下个周期还能补推
@@ -726,6 +841,65 @@ class HealthBridge(Star):
 
         return web.json_response({"ok": True, "date": date_str, "removed": True})
 
+    # -- 奶茶记录 ----------------------------------------------------------
+
+    async def _handle_api_milktea_month(self, request: web.Request) -> web.Response:
+        """某月每天喝了几杯（只返回有记录的日期）。"""
+        ym = (request.query.get("ym") or datetime.now().strftime("%Y-%m")).strip()
+        try:
+            summary = milktea.month_summary(self._data_dir, ym)
+        except Exception:
+            logger.exception("[Xavier_care] 读取奶茶月度数据失败")
+            return web.json_response({"ok": False, "error": "internal error"}, status=500)
+        return web.json_response({"ok": True, "ym": ym, **summary})
+
+    async def _handle_api_milktea_day(self, request: web.Request) -> web.Response:
+        """某天的奶茶明细。"""
+        date_str = (request.query.get("date") or "").strip()
+        if not health_logic.is_valid_date(date_str):
+            return web.json_response({"ok": False, "error": "bad date"}, status=400)
+        items = milktea.load_day(self._data_dir, date_str)
+        return web.json_response({"ok": True, "date": date_str, "items": items})
+
+    async def _handle_api_milktea_add(self, request: web.Request) -> web.Response:
+        """页面补记一条奶茶。"""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "bad json"}, status=400)
+
+        date_str = str(body.get("date") or "").strip()
+        if not health_logic.is_valid_date(date_str):
+            return web.json_response({"ok": False, "error": "bad date"}, status=400)
+        if milktea.is_future(date_str):
+            return web.json_response({"ok": False, "error": "future date"}, status=400)
+
+        entry = milktea.add_entry(self._data_dir, date_str, body, source=milktea.SOURCE_MANUAL)
+        if entry is None:
+            return web.json_response({"ok": False, "error": "rejected"}, status=400)
+        logger.info(
+            f"[Xavier_care] 补记奶茶 {date_str}: {entry.get('brand')}{entry.get('name')}"
+        )
+        return web.json_response({"ok": True, "date": date_str, "item": entry})
+
+    async def _handle_api_milktea_delete(self, request: web.Request) -> web.Response:
+        """删掉某天的一条奶茶记录。"""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "bad json"}, status=400)
+
+        date_str = str(body.get("date") or "").strip()
+        if not health_logic.is_valid_date(date_str):
+            return web.json_response({"ok": False, "error": "bad date"}, status=400)
+        if not milktea.delete_entry(self._data_dir, date_str, body.get("id")):
+            return web.json_response({"ok": False, "error": "not found"}, status=404)
+        return web.json_response({"ok": True, "date": date_str})
+
     async def _handle_asset(self, request: web.Request) -> web.Response:
         """返回插件 assets/ 目录下的静态图片。防路径穿越。"""
         from urllib.parse import unquote
@@ -758,9 +932,97 @@ class HealthBridge(Star):
 
     # -- 指令入口 ----------------------------------------------------------
 
+    # -- 奶茶工具 ----------------------------------------------------------
+
+    @filter.llm_tool(name="record_milktea")
+    async def record_milktea(
+        self,
+        event: AstrMessageEvent,
+        brand: str = "",
+        name: str = "",
+        sugar: str = "",
+        ice: str = "",
+        toppings: str = "",
+        rating: int = 0,
+        note: str = "",
+        date: str = "",
+    ) -> str:
+        """记下她今天喝了什么奶茶。她自己说喝了奶茶、晒奶茶、或提到新尝试的店时调用。
+
+        她没提到的字段一律留空，不要替她编——尤其是评分，她没打分就传 0。
+        note 要照抄她的原话，不要改写她的语气。
+
+        Args:
+            brand(string): 品牌或店名，如「霸王茶姬」。
+            name(string): 饮品名，如「伯牙绝弦」。
+            sugar(string): 甜度原话，如「三分糖」「无糖」；不知道留空。
+            ice(string): 冰量，如「少冰」「去冰」；不知道留空。
+            toppings(string): 加料，多种用「、」隔开，如「珍珠、奶盖」。
+            rating(int): 她给这杯的评分 1-5；她没打分就传 0。
+            note(string): 她的点评原话。
+            date(string): 日期 YYYY-MM-DD，默认今天。
+        """
+        try:
+            if not brand and not name:
+                return "没听清是哪一杯，等她说清楚再记。"
+            target = (date or "").strip() or datetime.now().strftime("%Y-%m-%d")
+            if not health_logic.is_valid_date(target):
+                return "日期格式不对，需要 YYYY-MM-DD。"
+            if milktea.is_future(target):
+                return "这个日期还没到，先记到今天吧。"
+
+            entry = milktea.add_entry(
+                self._data_dir,
+                target,
+                {
+                    "brand": brand,
+                    "name": name,
+                    "sugar_text": sugar,
+                    "ice": ice,
+                    "toppings": toppings,
+                    "rating": rating or None,
+                    "note": note,
+                },
+                source=milktea.SOURCE_CHAT,
+            )
+            if entry is None:
+                return "这条没记下：至少要有品牌或饮品名。"
+            logger.info(
+                f"[Xavier_care] 记录奶茶 {target}: {entry.get('brand')}{entry.get('name')}"
+            )
+            head = "".join(x for x in (entry.get("brand"), entry.get("name")) if x)
+            return f"已记下：{target} {head}。"
+        except Exception:
+            logger.exception("[Xavier_care] 记录奶茶失败")
+            return "记录奶茶时出错了。"
+
+    @filter.llm_tool(name="query_milktea")
+    async def query_milktea(self, event: AstrMessageEvent, days: int = 7, ym: str = "") -> str:
+        """查她的奶茶记录。聊到口味偏好、要不要点奶茶、或者她想回顾时调用。
+
+        Args:
+            days(int): 回顾最近多少天，默认 7，最多 90。
+            ym(string): 指定月份 YYYY-MM；填了就按月汇总，此时忽略 days。
+        """
+        try:
+            if ym and ym.strip():
+                month = ym.strip()
+                s = milktea.month_summary(self._data_dir, month)
+                if not s["total"]:
+                    return f"{month} 没有奶茶记录。"
+                detail = "\n".join(
+                    milktea.describe_day(d, milktea.load_day(self._data_dir, d))
+                    for d in sorted(s["days"])
+                )
+                return f"{month} 共 {s['total']} 杯，最常喝：{s['favorite'] or '—'}\n{detail}"
+            return milktea.describe_recent(self._data_dir, days)
+        except Exception:
+            logger.exception("[Xavier_care] 查询奶茶记录失败")
+            return "查奶茶记录时出错了。"
+
     @filter.command("health")
     async def cmd_health(self, event: AstrMessageEvent, action: str = ""):
-        """/health [on|off|test|base|log|mark|end] 健康插件总入口。
+        """/health [on|off|test|base|log|mark|end|chat] 健康插件总入口。
 
         不带参数时给出总览：主动关怀状态 + 经期状态。
         """
@@ -801,9 +1063,31 @@ class HealthBridge(Star):
                 yield event.plain_result(self._apply_period_mark(act))
                 return
 
+            if act == "chat":
+                # 觉得聊天里插关怀不好用，一句话就能关掉（写回配置，长期生效）
+                new_val = not self.chat_care.enabled
+                self.config["care_in_chat_enabled"] = new_val
+                saved = True
+                try:
+                    self.config.save_config()
+                except Exception:
+                    saved = False
+                    logger.exception("[Xavier_care] 写「聊天内关怀」开关失败")
+                yield event.plain_result(
+                    f"聊天内自然关怀已{'开启' if new_val else '关闭'}"
+                    + ("" if saved else "（本次运行有效，写入配置失败，见日志）")
+                    + "\n\n"
+                    + self._render_chat_care_status()
+                )
+                return
+
             # 默认（含 status）：总览
             yield event.plain_result(
-                self._render_monitor_status() + "\n\n" + self._render_period_status()
+                self._render_monitor_status()
+                + "\n\n"
+                + self._render_period_status()
+                + "\n\n"
+                + self._render_chat_care_status()
             )
             return
 
@@ -886,6 +1170,24 @@ class HealthBridge(Star):
         ]
         lines.extend(self.guard.status_lines())
         lines.append(f"簇冷却   : {self.guard.cluster_status()}")
+        return "\n".join(lines)
+
+    def _render_chat_care_status(self) -> str:
+        """聊天内自然关怀状态。"""
+        lines = [
+            "[聊天内自然关怀 状态]",
+            f"启用     : {'✅' if self.chat_care.enabled else '❌'}",
+            f"每轮最多 : {int(self.config.get('chat_hint_max_items', 2))} 条要点",
+            f"静默期   : 同一要点 {self.config.get('chat_hint_ttl_hours', 6)} 小时内不重复提",
+            "反向去重 : "
+            f"{'✅' if self.config.get('chat_hint_dedup_push', True) else '❌'}"
+            "（聊天提过 → 当天不再单独推）",
+        ]
+        try:
+            today = sorted(self.chat_care.mentioned_types_today())
+            lines.append(f"今天已提 : {', '.join(today) if today else '（无）'}")
+        except Exception:
+            lines.append("今天已提 : 读取失败（见日志）")
         return "\n".join(lines)
 
     def _render_period_status(self) -> str:
