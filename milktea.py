@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -75,6 +76,24 @@ def _text(value: Any, limit: int) -> str:
     return re.sub(r"\s+", " ", value).strip()[:limit]
 
 
+# 品牌别名只做精确匹配，避免 KOI 作为子串误伤其他店名。
+_BRAND_ALIASES = {
+    "koi": "KOI",
+    "koithe": "KOI",
+}
+
+
+def canonical_brand(value: Any) -> str:
+    """把同一品牌的不同写法收成一个名字；未收录的品牌原样返回。"""
+    brand = _text(value, LIMIT_BRAND)
+    if not brand:
+        return ""
+    key = unicodedata.normalize("NFKD", brand)
+    key = "".join(ch for ch in key if not unicodedata.combining(ch))
+    key = re.sub(r"[\s·._-]+", "", key).casefold()
+    return _BRAND_ALIASES.get(key, brand)
+
+
 def _toppings(value: Any) -> list[str]:
     if value is None:
         return []
@@ -114,7 +133,7 @@ def normalize_entry(
     if not isinstance(raw, dict):
         return None
 
-    brand = _text(raw.get("brand"), LIMIT_BRAND)
+    brand = canonical_brand(raw.get("brand"))
     name = _text(raw.get("name") or raw.get("drink"), LIMIT_NAME)
     if not brand and not name:
         return None
@@ -157,7 +176,14 @@ def load_day(data_dir: Path, date_str: str) -> list[dict]:
     items = raw.get("milktea") if isinstance(raw, dict) else None
     if not isinstance(items, list):
         return []
-    return [it for it in items if isinstance(it, dict)]
+    out: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        item = dict(it)
+        item["brand"] = canonical_brand(item.get("brand"))
+        out.append(item)
+    return out
 
 
 def save_day(data_dir: Path, date_str: str, items: list[dict]) -> bool:

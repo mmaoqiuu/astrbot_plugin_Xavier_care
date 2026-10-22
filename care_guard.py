@@ -43,6 +43,8 @@ CLUSTER_MAP: dict[str, str] = {
     "period_daily": "period",
     # 经期预测：倒计时提醒，容易连着好几天触发，冷却要给得长
     "period_soon": "forecast",
+    # 心率骤升：短时间内的明显起伏，单独一簇
+    "hr_spike": "hr",
 }
 
 # 各簇默认冷却（小时），配置项 group_cooldown_hours_<簇名> 可覆盖。
@@ -52,6 +54,7 @@ DEFAULT_CLUSTER_COOLDOWN: dict[str, float] = {
     "night": 2.0,
     "period": 20.0,
     "forecast": 168.0,
+    "hr": 12.0,
 }
 
 CLUSTER_LABEL: dict[str, str] = {
@@ -60,6 +63,7 @@ CLUSTER_LABEL: dict[str, str] = {
     "night": "夜间实时",
     "period": "经期",
     "forecast": "经期预测",
+    "hr": "心率",
 }
 
 # 这些簇的推送不占「每日上限」额度：她每天总该被惦记一下。

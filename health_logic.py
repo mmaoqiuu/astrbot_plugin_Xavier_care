@@ -384,6 +384,86 @@ def normalize_payload(payload: object) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# 心率日内时序（v1.14）：只做同一分钟去重，原始实测点全量保留。
+# ---------------------------------------------------------------------------
+_HR_MIN_VALID = 20       # 低于 20 / 高于 250 的读数当脏数据丢掉
+_HR_MAX_VALID = 250
+
+
+def _valid_hr(value: object) -> float | None:
+    """校验心率读数：非数字、bool、越界值一律返回 None。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    val = float(value)
+    if val != val or val < _HR_MIN_VALID or val > _HR_MAX_VALID:
+        return None
+    return round(val, 1)
+
+
+def _parse_timeline(raw: object) -> list[dict]:
+    """把 hr_timeline 洗成 [{time: HH:MM, hr: float}]，按时间正序。坏条目直接丢。"""
+    out: list[dict] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            t, hr = item.get("time"), _valid_hr(item.get("hr"))
+            minutes = _hhmm_to_min(t)
+            if minutes is None or hr is None:
+                continue
+            out.append({"time": f"{minutes // 60:02d}:{minutes % 60:02d}", "hr": hr})
+    out.sort(key=lambda p: _hhmm_to_min(p["time"]))
+    return out
+
+
+def _append_hr_point(timeline: object, time_str: object, hr: object) -> list[dict]:
+    """往日内时序里打一个点。
+
+    v1.14 起不再合并时间窗、也不再抽稀：
+    - 同一分钟只留最后写入的一条，避免重复上报刷屏；
+    - 其余实测点全量保留，忠实记录每一段起伏。
+    """
+    points = _parse_timeline(timeline)
+    minutes = _hhmm_to_min(time_str)
+    val = _valid_hr(hr)
+    if minutes is None or val is None:
+        return points
+
+    stamp = f"{minutes // 60:02d}:{minutes % 60:02d}"
+    points.append({"time": stamp, "hr": val})
+    points.sort(key=lambda p: _hhmm_to_min(p["time"]))
+    deduped: dict[str, dict] = {}
+    for p in points:
+        deduped[p["time"]] = p  # 同一分钟以后写入的为准
+    return [deduped[k] for k in sorted(deduped, key=_hhmm_to_min)]
+
+
+def _hr_stats(points: list[dict]) -> dict[str, float]:
+    """由日内时序算 min / max / avg，读数保留一位小数。"""
+    vals = [p["hr"] for p in points]
+    return {
+        "heart_rate_min": round(min(vals), 1),
+        "heart_rate_max": round(max(vals), 1),
+        "heart_rate_avg": round(sum(vals) / len(vals), 1),
+    }
+
+
+def _hr_timeline_fragment(data: dict) -> str | None:
+    """给 LLM 看的心率走势句；不足 2 个点就不说（单点没走势）。"""
+    points = _parse_timeline(data.get("hr_timeline"))
+    if len(points) < 2:
+        return None
+    stats = _hr_stats(points)
+    last = points[-1]
+    lo, hi = _fmt_number(stats["heart_rate_min"]), _fmt_number(stats["heart_rate_max"])
+    avg, cur = _fmt_number(stats["heart_rate_avg"]), _fmt_number(last["hr"])
+    return (
+        f"心率走势：全天 {lo}~{hi} bpm，均值 {avg}；"
+        f"最近一次 {last['time']} 为 {cur}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 存储：一天一个文件，<data_dir>/<date>.json，UTF-8 无 BOM，同一天覆盖。
 # ---------------------------------------------------------------------------
 
@@ -407,9 +487,16 @@ def store_report(data_dir: Path, data: dict) -> Path:
             merged = {}
 
     has_app_event = "event" in data
+    incoming_hr = _valid_hr(data.get("latest_hr"))
+    # 时序基线：旧文件没有 hr_timeline 时，用上一次的 latest_hr 回填首点。
+    timeline = _parse_timeline(merged.get("hr_timeline"))
+    if not timeline:
+        prev_hr = _valid_hr(merged.get("latest_hr"))
+        if prev_hr is not None and _hhmm_to_min(merged.get("current_time")) is not None:
+            timeline = [{"time": merged["current_time"], "hr": prev_hr}]
     for k, v in data.items():
         # App 使用记录（events / event）已移交 event_sensor 插件处理，这里一律不入库。
-        if k in ("events", "event"):
+        if k in ("events", "event", "hr_timeline"):
             continue
         if has_app_event and k in ("app_name", "source"):
             continue
@@ -428,6 +515,15 @@ def store_report(data_dir: Path, data: dict) -> Path:
     now = datetime.now()
     merged["_received_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
     merged["current_time"] = now.strftime("%H:%M")
+
+    # 本次上报带了心率才打点；纯步数上报不制造假心率点。
+    if incoming_hr is not None:
+        timeline = _append_hr_point(timeline, merged["current_time"], incoming_hr)
+        merged["hr_timeline"] = timeline
+        # 手环自己给的 min/max/avg 优先，只有它没给才用时序重算。
+        for key, val in _hr_stats(timeline).items():
+            if data.get(key) is None:
+                merged[key] = val
 
     text = json.dumps(merged, ensure_ascii=False, indent=2)
     tmp = data_dir / f".{date_str}.json.tmp"
@@ -805,6 +901,10 @@ def _day_fragments(data: dict) -> list[str]:
         frags.append(f"步行心率 {walking_hr}")
 
     latest_hr = _fmt_number(data.get("latest_hr"))
+    if latest_hr is None:
+        points = _parse_timeline(data.get("hr_timeline"))
+        if points:
+            latest_hr = _fmt_number(points[-1]["hr"])
     if latest_hr is not None:
         frags.append(f"最近心率 {latest_hr}")
 
@@ -853,6 +953,10 @@ def format_report(data: dict | None) -> str:
     day = _day_fragments(data)
     if day:
         lines.append("今天：" + "；".join(day) + "。")
+
+    hr_trend = _hr_timeline_fragment(data)
+    if hr_trend:
+        lines.append(hr_trend + "。")
 
     nutrition = _nutrition_fragments(data)
     if nutrition:

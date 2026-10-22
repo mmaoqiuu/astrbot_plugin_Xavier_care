@@ -209,6 +209,12 @@
     "default": 1.15,
     "hint": "1.15 表示心率比静息高 15% 以上，才算「人还醒着」。"
   },
+  "hr_spike_enabled": {
+    "description": "规则：心率骤升",
+    "type": "bool",
+    "default": false,
+    "hint": "90 分钟内涨 30 bpm 以上会提醒一次。数据稀疏或运动多时容易误报，默认关。"
+  },
   "rule_hrv_low": {
     "description": "规则：HRV 偏低",
     "type": "bool",
@@ -262,5 +268,77 @@
     "type": "bool",
     "default": true,
     "hint": "开启后每次推送（成功或失败）都会记进 care_log.jsonl，可用 /health log 查看。"
+  },
+  "mirror_data_resonance_enabled": {
+    "description": "身体镜像：手机数据共振",
+    "type": "bool",
+    "default": true,
+    "hint": "手机上报健康数据后，让沈星回按她的真实心率轻轻共振。关闭则只走对话心率。"
+  },
+  "mirror_data_debounce_minutes": {
+    "description": "身体镜像：数据共振间隔（分钟）",
+    "type": "int",
+    "default": 15,
+    "hint": "两次数据共振之间至少隔多久，避免连续上报刷点。默认 15 分钟。"
+  },
+  "mirror_data_whisper_enabled": {
+    "description": "身体镜像：数据推送时主动说话",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭后手机推送只更新心率共振和曲线，不会在对话里主动发关怀；健康异常仍由后台主动关怀检测。"
+  },
+  "mirror_data_whisper_cooldown_minutes": {
+    "description": "身体镜像：数据私语冷却（分钟）",
+    "type": "int",
+    "default": 40,
+    "hint": "数据共振时，他主动说一句话的最小间隔。仅在“数据推送时主动说话”开启时生效。"
+  },
+  "mirror_min_interval_seconds": {
+    "description": "身体镜像：生成最小间隔（秒）",
+    "type": "int",
+    "default": 15,
+    "hint": "她连发几条消息时合并成一次生成，默认 15 秒。调太大响应会变慢。"
+  },
+  "mirror_auto_rest_hours": {
+    "description": "身体镜像：静息补点间隔（小时）",
+    "type": "int",
+    "default": 2,
+    "hint": "超过这么久没对话，就按当前生活状态补一个静息点，避免点太少连不成线。填 0 关闭。"
+  },
+  "mirror_auto_rest_recent_guard_minutes": {
+    "description": "身体镜像：静息补点情绪保护（分钟）",
+    "type": "int",
+    "default": 30,
+    "hint": "补静息点前，如果最近这么多分钟内有情绪点，就跳过本次补点。默认 30 分钟。"
+  },
+  "mirror_decay_minutes": {
+    "description": "身体镜像：心率平复周期（分钟）",
+    "type": "int",
+    "default": 25,
+    "hint": "心跳飙高后，15~30 分钟内平滑回落到基础值。默认 25 分钟。"
+  },
+  "mirror_provider_id": {
+    "description": "身体镜像：生成用模型",
+    "type": "string",
+    "default": "",
+    "hint": "留空=用该会话当前聊天模型。建议单独填一个便宜的小模型，这个调用比较频繁。"
+  },
+  "mirror_target_umo": {
+    "description": "身体镜像：只跟哪个私聊会话",
+    "type": "string",
+    "default": "",
+    "hint": "留空=每个私聊各自生成一份（页面显示最近更新的那份）。填 unified_msg_origin 可固定只跟一个私聊，避免别的私聊也生成。一般留空即可。"
+  },
+  "mirror_name": {
+    "description": "身体镜像：角色名",
+    "type": "string",
+    "default": "沈星回",
+    "hint": "显示在心率页卡片和曲线图例里。改完要重载插件。"
+  },
+  "mirror_enabled": {
+    "description": "身体镜像：让沈星回的心率随互动变化",
+    "type": "bool",
+    "default": true,
+    "hint": "心率页新增一条金色虚线：沈星回的心率会随你们的互动轻轻变化。仅用于角色陪伴体验，不作为医疗数据。关闭后页面只保留你自己的实测线。"
   }
 }

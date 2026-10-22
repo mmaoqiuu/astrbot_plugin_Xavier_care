@@ -34,12 +34,13 @@ from aiohttp import web
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.provider import ProviderRequest
+from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from . import chat_care, health_logic, milktea
+from . import chat_care, health_logic, milktea, mirror_life, mirror_logic
 from .care_guard import CareGuard
+from .mirror_store import MirrorStore
 from .monitor import HealthMonitor
 
 # 插件目录名，同时用作数据子目录名。数据存在 AstrBot 的 data 目录下，
@@ -63,7 +64,7 @@ MAX_BODY_BYTES = 64 * 1024
 INJECT_SENDER_NAME = "event_bridge"
 
 
-@register(PLUGIN_DIR_NAME, "pupotato", "接收手机推送的健康数据并存储，提供一个工具供角色读取最近的身体状态。", "1.9.1")
+@register(PLUGIN_DIR_NAME, "pupotato", "接收手机推送的健康数据并存储，提供一个工具供角色读取最近的身体状态。", "2.0.0")
 class HealthBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -75,6 +76,8 @@ class HealthBridge(Star):
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._last_event: AstrMessageEvent | None = None
+        self._pending_mirror_record: dict | None = None
+        self._mirror_data_task: asyncio.Task | None = None
 
         # 健康异常检测 + 主动关怀
         self.monitor = HealthMonitor(data_dir=self._data_dir, config=self.config)
@@ -87,6 +90,13 @@ class HealthBridge(Star):
         # monitor.scan() 的短时缓存（她连发几条消息时避免重复读盘）
         self._chat_scan_cache: tuple[float, list] = (0.0, [])
         self._monitor_task: asyncio.Task | None = None
+        # 沈星回身体镜像：按会话存，后台生成不阻塞回复
+        self.mirror_store = MirrorStore(self._data_dir)
+        self._mirror_task: asyncio.Task | None = None
+        self._mirror_data_task: asyncio.Task | None = None
+        self._mirror_lock = asyncio.Lock()
+        self._mirror_last_tick = 0.0
+        self._mirror_last_error = ""
         # 运行时开关（/health on|off 会即时改它，不依赖 config 写回）
         self._monitor_runtime_enabled: bool = bool(
             self.config.get("monitor_enabled", False)
@@ -94,6 +104,8 @@ class HealthBridge(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message_record(self, event: AstrMessageEvent):
+        if not await self._is_session_enabled(event):
+            return
         # 缓存最近一次的真实交互事件，拿到 umo、cqhttp 实例和 bot 身份
         if not event.get_sender_id() or event.get_sender_id() == event.get_self_id():
             return
@@ -103,16 +115,376 @@ class HealthBridge(Star):
             return
         self._last_event = event
         self.guard.record_user_message()
+        # 身体镜像：任何一句真人对话都算「有对话」，用于判断是否满 2 小时没说话
+        if (
+            bool(self.config.get("mirror_enabled", True))
+            and event.is_private_chat()
+        ):
+            await self._mirror_touch_chat(event)
 
-    @filter.on_decorating_result()
+    @filter.on_decorating_result(priority=1)
     async def on_bot_reply(self, event: AstrMessageEvent):
-        """机器人每次发送时记一笔，供「对话互斥」判断。"""
+        """机器人每次发送时记一笔，并兜底剥掉身体镜像标签。"""
         if not await self._is_session_enabled(event):
             return
+        try:
+            result = event.get_result()
+            for comp in getattr(result, "chain", None) or []:
+                if (
+                    getattr(comp, "type", "") == "Plain"
+                    or type(comp).__name__ == "Plain"
+                ) and hasattr(comp, "text"):
+                    comp.text = mirror_logic.strip_heart_tags(comp.text)
+        except Exception:
+            logger.exception("[Xavier_care] 兜底清理身体镜像标签失败（不影响发送）")
         try:
             self.guard.record_bot_reply()
         except Exception:
             logger.exception("[Xavier_care] 记录机器人发送时间失败")
+
+    @filter.on_llm_response(priority=90)
+    async def on_llm_response(
+        self, event: AstrMessageEvent, response: LLMResponse
+    ) -> None:
+        """主回复里顺手带来的 <xavier_heart> 标签：解析、落盘、删掉标签。
+
+        不再额外调用模型；标签缺失或 JSON 坏掉都只跳过，不影响她正常回复。
+        优先级低于 Xavier_Hub 的 100，确保心声先提取，再处理心率标签。
+        """
+        if not response:
+            return
+
+        # 绝对兜底剥离：比 active_function(priority=0) 先跑，无条件剥离 response.completion_text
+        raw = response.completion_text or ""
+        cleaned = mirror_logic.strip_heart_tags(raw)
+        if cleaned != raw:
+            response.completion_text = cleaned
+
+        try:
+            if not await self._is_session_enabled(event):
+                return
+            if not bool(self.config.get("mirror_enabled", True)):
+                return
+            if not event.is_private_chat() or self._is_injected_event(event):
+                return
+            umo = self._mirror_resolve_umo(event)
+            if not umo:
+                return
+            parsed, _ = mirror_logic.extract_heart_payload(raw)
+            if not parsed:
+                return
+            await self._mirror_apply_response(umo, parsed)
+        except Exception:
+            logger.exception("[Xavier_care] 解析对话心率失败（不影响回复）")
+
+    def _mirror_resolve_umo(self, event: AstrMessageEvent) -> str:
+        target = str(self.config.get("mirror_target_umo") or "").strip()
+        current = event.unified_msg_origin
+        if target:
+            # 配了固定会话就只跟那一个，避免别的私聊也生成一份。
+            return target if current == target else ""
+        return current
+
+    async def _mirror_touch_chat(self, event: AstrMessageEvent) -> None:
+        """记下最近一次真人对话时间，供静息补点判断「多久没说话」。"""
+        try:
+            umo = self._mirror_resolve_umo(event)
+            if not umo:
+                return
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            async with self._mirror_lock:
+                await asyncio.to_thread(
+                    self._mirror_touch_sync, umo, date_str, now
+                )
+        except Exception:
+            logger.exception("[Xavier_care] 记录对话时间失败（不影响回复）")
+
+    def _mirror_touch_sync(self, umo: str, date_str: str, now: datetime) -> None:
+        state = self.mirror_store.load(umo, date_str)
+        if not isinstance(state, dict) or not state:
+            state = {
+                "version": 1,
+                "date": date_str,
+                "name": str(self.config.get("mirror_name") or "沈星回"),
+                "umo": umo,
+                "points": [],
+                "current": {},
+            }
+        state["last_chat_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        self.mirror_store.save(umo, date_str, state)
+
+    async def _mirror_apply_response(self, umo: str, parsed: dict) -> None:
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        decay = int(self.config.get("mirror_decay_minutes", 25) or 25)
+        gap = int(self.config.get("mirror_emotion_gap_minutes", 5) or 5)
+        limit = int(self.config.get("mirror_daily_emotion_points", 20) or 20)
+        life = await asyncio.to_thread(
+            mirror_life.build_snapshot, self._data_dir, now
+        )
+        cooldown = int(self.config.get("mirror_chat_cooldown_minutes", 20) or 20)
+        async with self._mirror_lock:
+            state = mirror_logic.ensure_state(
+                self.mirror_store.load(umo, date_str),
+                umo,
+                date_str,
+                str(self.config.get("mirror_name") or "沈星回"),
+                life,
+            )
+            if not mirror_logic.chat_prompt_due(state, now, cooldown):
+                return
+            state, result = mirror_logic.apply_dialog_update(
+                state, parsed, life, now, decay, gap, limit
+            )
+            if result == "calm":
+                self.mirror_store.save(umo, date_str, state)
+                self._mirror_last_error = ""
+                return
+            self.mirror_store.save(umo, date_str, state)
+            self._mirror_last_error = ""
+            logger.info(
+                "[Xavier_care] 对话心率已更新："
+                f"{state['current'].get('hr')} bpm / "
+                f"{state['current'].get('emotion')} / {result}"
+            )
+
+    def _mirror_schedule_data_resonance(self, record: dict) -> None:
+        """手机数据上报后，后台跑一次「身体共振」，不阻塞 HTTP。"""
+        if not isinstance(record, dict):
+            return
+        self._pending_mirror_record = dict(record)
+        if self._mirror_data_task and not self._mirror_data_task.done():
+            return
+        self._mirror_data_task = asyncio.create_task(self._mirror_data_worker())
+
+    async def _mirror_data_worker(self) -> None:
+        try:
+            while self._pending_mirror_record:
+                record = self._pending_mirror_record
+                self._pending_mirror_record = None
+                await self._mirror_data_sync(record)
+        except Exception:
+            logger.exception("[Xavier_care] 数据共振失败（不影响上报）")
+        finally:
+            self._mirror_data_task = None
+
+    async def _mirror_data_sync(self, record: dict) -> None:
+        if not bool(self.config.get("mirror_enabled", True)):
+            return
+        if not bool(self.config.get("mirror_data_resonance_enabled", True)):
+            return
+        # 数据推送只负责共振曲线；主动关怀交给 monitor，默认不在这里说话。
+        allow_whisper = bool(
+            self.config.get("mirror_data_whisper_enabled", False)
+        )
+        hr = int(record.get("latest_hr") or 0)
+        if hr <= 0:
+            points = record.get("hr_timeline") or []
+            if isinstance(points, list) and points:
+                hr = int((points[-1] or {}).get("hr") or 0)
+        if hr <= 0:
+            return
+
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        life = await asyncio.to_thread(mirror_life.build_snapshot, self._data_dir, now)
+        umo = self._mirror_default_umo()
+        if not umo:
+            return
+
+        sleep_min = 0
+        sleep = record.get("sleep")
+        if isinstance(sleep, dict):
+            sleep_min = int(sleep.get("duration_min") or 0)
+        facts = [
+            f"她最近心率：{hr} bpm",
+            f"今天步数：{int(record.get('steps') or 0)}",
+            f"今日运动：{int(record.get('exercise_min') or 0)} 分钟",
+        ]
+        if sleep_min:
+            facts.append(f"昨晚睡了：{sleep_min // 60} 小时 {sleep_min % 60} 分")
+        if record.get("resting_hr"):
+            facts.append(f"静息心率：{record.get('resting_hr')} bpm")
+        if record.get("hrv_ms"):
+            facts.append(f"HRV：{record.get('hrv_ms')} ms")
+
+        name = str(self.config.get("mirror_name") or "沈星回")
+        persona = await self._mirror_persona(umo)
+        sep = chr(10)
+        system_prompt = sep.join(
+            p for p in (
+                persona,
+                f"你是{name}。现在用第一人称，像平时一样和她说话。",
+                "不要提手环、手表、心率数字或健康数据，除非她主动问。",
+            ) if p
+        )
+        prompt = sep.join(
+            ["小狗戴着手表，你感应到她的身体状态："]
+            + [f"- {f}" for f in facts]
+            + [
+                f"现在时间：{now.strftime('%H:%M')}",
+                "你自己的身体会跟着轻轻共振。判断她此刻在做什么、累不累、需不需要你开口。",
+                "只输出 JSON，不要 Markdown：",
+                '{"whisper":"想对她说的一句短话，25字内，口语，温柔，不解释数据",'
+                '"emotion":"平静|开心|吃醋|亲昵|激动|疲惫|运动",'
+                '"reason":"二十字内","should_speak":true或false}',
+                "规则：should_speak 只在真的想关心她时填 true，不要每半小时都说话；"
+                "她睡着或数据正常时填 false。",
+                "whisper 只能报备或表达关心，必须是陈述句，禁止提问、追问和问号；"
+                "禁止“问问、感觉怎么样、要不要、是不是、困不困、累不累”。",
+            ]
+        )
+
+        parsed: dict = {}
+        try:
+            provider = self.context.get_using_provider(umo)
+            if provider:
+                resp = await asyncio.wait_for(
+                    provider.text_chat(prompt=prompt, system_prompt=system_prompt),
+                    timeout=25,
+                )
+                parsed = mirror_logic.parse_llm_json(
+                    getattr(resp, "completion_text", "") or ""
+                )
+        except Exception:
+            logger.exception("[Xavier_care] 数据共振生成失败，仅更新心率点")
+            parsed = {}
+
+        whisper = mirror_logic.sanitize_whisper(parsed.get("whisper"))
+        if parsed.get("should_speak") is False:
+            whisper = ""
+        emotion = str(parsed.get("emotion") or "运动").strip()
+        reason = str(parsed.get("reason") or "感应到你在动").strip()
+
+        debounce = int(self.config.get("mirror_data_debounce_minutes", 15) or 15)
+        cool = int(self.config.get("mirror_data_whisper_cooldown_minutes", 40) or 40)
+        async with self._mirror_lock:
+            state = mirror_logic.ensure_state(
+                self.mirror_store.load(umo, date_str),
+                umo,
+                date_str,
+                name,
+                life,
+            )
+            state, result = mirror_logic.apply_data_update(
+                state,
+                life,
+                now,
+                hr,
+                whisper=whisper,
+                emotion=emotion,
+                reason=reason,
+                debounce_minutes=debounce,
+                whisper_cooldown_minutes=cool,
+                allow_whisper=allow_whisper,
+            )
+            self.mirror_store.save(umo, date_str, state)
+            self._mirror_last_error = ""
+        logger.info(
+            f"[Xavier_care] 数据共振：{state['current'].get('hr')} bpm / {result}"
+        )
+        if result == "point_whisper" and whisper:
+            ok = await self._send_direct(umo, whisper)
+            if not ok:
+                logger.warning("[Xavier_care] 数据共振私语发送失败")
+
+    def _mirror_default_umo(self) -> str:
+        target = str(self.config.get("mirror_target_umo") or "").strip()
+        if target:
+            return target
+        if self._last_event:
+            return self._last_event.unified_msg_origin
+        return ""
+
+    async def _mirror_persona(self, umo: str) -> str:
+        try:
+            pm = getattr(self.context, "persona_manager", None)
+            if pm is None:
+                return ""
+            persona = await pm.get_default_persona_v3(umo=umo)
+            if not persona:
+                persona = await pm.get_default_persona_v3()
+            if isinstance(persona, dict):
+                return str(persona.get("prompt") or "").strip()
+            return str(getattr(persona, "system_prompt", "") or "").strip()
+        except Exception:
+            logger.exception("[Xavier_care] 读取人格失败，使用内置口吻")
+            return ""
+
+    async def _mirror_tick(self) -> None:
+        """静息补点：只补当前时刻，不回头伪造早上的点。"""
+        if not bool(self.config.get("mirror_enabled", True)):
+            return
+        hours = int(self.config.get("mirror_auto_rest_hours", 2) or 0)
+        if hours <= 0:
+            return
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        decay = int(self.config.get("mirror_decay_minutes", 25) or 25)
+        guard = int(self.config.get("mirror_auto_rest_recent_guard_minutes", 30) or 0)
+        life = await asyncio.to_thread(mirror_life.build_snapshot, self._data_dir, now)
+        for state in self.mirror_store.all_today(date_str):
+            umo = str(state.get("umo") or "")
+            if not umo:
+                continue
+            if not mirror_logic.auto_rest_due(state, now, hours, guard):
+                continue
+            async with self._mirror_lock:
+                state = mirror_logic.ensure_state(
+                    state,
+                    umo,
+                    date_str,
+                    str(self.config.get("mirror_name") or "沈星回"),
+                    life,
+                )
+                mirror_logic.append_auto_rest(state, life, now, decay)
+                self.mirror_store.save(umo, date_str, state)
+            logger.info(
+                f"[Xavier_care] 身体镜像静息补点：{state['current'].get('hr')} bpm"
+            )
+
+    async def _mirror_loop(self) -> None:
+        try:
+            await asyncio.sleep(20)
+            while True:
+                try:
+                    await self._mirror_tick()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("[Xavier_care] 身体镜像静息补点失败")
+                await asyncio.sleep(600)
+        except asyncio.CancelledError:
+            pass
+
+    async def _mirror_api_snapshot(self) -> dict:
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        decay = int(self.config.get("mirror_decay_minutes", 25) or 25)
+        life = await asyncio.to_thread(mirror_life.build_snapshot, self._data_dir, now)
+
+        if time.time() - self._mirror_last_tick >= 60:
+            self._mirror_last_tick = time.time()
+            try:
+                await self._mirror_tick()
+            except Exception:
+                logger.exception("[Xavier_care] 打开页面时补静息点失败")
+
+        target = str(self.config.get("mirror_target_umo") or "").strip()
+        if target:
+            state = self.mirror_store.load(target, date_str)
+        else:
+            state = self.mirror_store.latest_today(date_str)
+
+        fallback = self._mirror_last_error or "正在同步"
+        if not state:
+            try:
+                if not self.context.get_using_provider(target or None):
+                    fallback = "未配置生成模型"
+            except Exception:
+                pass
+        return mirror_logic.public_snapshot(state, life, now, decay, fallback)
 
     @filter.on_llm_request()
     async def on_llm_request(
@@ -132,21 +504,59 @@ class HealthBridge(Star):
             # 主动推送自己注入的伪消息：那条提示词里已经带好关怀内容，
             # 再叠一层会变成「对着自己的指令回复」。
             return
-        if not self.chat_care.enabled:
-            return
-        try:
-            text, used = self.chat_care.render(
-                alerts=self._chat_alerts(),
-                period=self._period_snapshot(),
-            )
-            if text:
-                req.system_prompt += "\n\n" + text
-                logger.info(
-                    "[Xavier_care] 已注入聊天内关怀："
-                    f"{('要点 ' + ', '.join(used)) if used else '仅经期语境'}"
+        if self.chat_care.enabled:
+            try:
+                text, used = self.chat_care.render(
+                    alerts=self._chat_alerts(),
+                    period=self._period_snapshot(),
                 )
+                if text:
+                    req.system_prompt = (req.system_prompt or "") + "\n\n" + text
+                    logger.info(
+                        "[Xavier_care] 已注入聊天内关怀："
+                        f"{('要点 ' + ', '.join(used)) if used else '仅经期语境'}"
+                    )
+            except Exception:
+                logger.exception("[Xavier_care] 注入聊天内关怀失败（不影响本轮回复）")
+        try:
+            await self._inject_mirror_prompt(event, req)
         except Exception:
-            logger.exception("[Xavier_care] 注入聊天内关怀失败（不影响本轮回复）")
+            logger.exception("[Xavier_care] 注入身体镜像规则失败（不影响本轮回复）")
+
+    async def _inject_mirror_prompt(
+        self, event: AstrMessageEvent, req: ProviderRequest
+    ) -> None:
+        """把「回复末尾顺手报心率」的隐藏规则塞进本轮系统提示。"""
+        if not bool(self.config.get("mirror_enabled", True)):
+            return
+        if not event.is_private_chat() or self._is_injected_event(event):
+            return
+        umo = self._mirror_resolve_umo(event)
+        if not umo:
+            return
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        decay = int(self.config.get("mirror_decay_minutes", 25) or 25)
+        life = await asyncio.to_thread(
+            mirror_life.build_snapshot, self._data_dir, now
+        )
+        state = mirror_logic.ensure_state(
+            self.mirror_store.load(umo, date_str),
+            umo,
+            date_str,
+            str(self.config.get("mirror_name") or "沈星回"),
+            life,
+        )
+        cooldown = int(self.config.get("mirror_chat_cooldown_minutes", 20) or 20)
+        if not mirror_logic.chat_prompt_due(state, now, cooldown):
+            return
+        req.system_prompt = (req.system_prompt or "") + "\n\n" + mirror_logic.build_inline_prompt(
+            str(self.config.get("mirror_name") or "沈星回"),
+            state,
+            life,
+            now,
+            decay,
+        )
 
     async def _is_session_enabled(self, event: AstrMessageEvent) -> bool:
         """会话级插件被禁用时，钩子必须完全不执行。
@@ -256,6 +666,10 @@ class HealthBridge(Star):
         except OSError:
             logger.exception("[Xavier_care] 创建数据目录失败")
         self._run_cleanup()
+        try:
+            self.mirror_store.prune()
+        except Exception:
+            logger.exception("[Xavier_care] 清理身体镜像旧数据失败")
         await self._start_server()
 
         # 启动主动关怀轮询（用运行时开关判断，/health on 也能补起）
@@ -265,6 +679,10 @@ class HealthBridge(Star):
                 f"[Xavier_care] 主动关怀已启动，间隔 "
                 f"{int(self.config.get('check_interval', 900))}s"
             )
+
+        if bool(self.config.get("mirror_enabled", True)):
+            self._mirror_task = asyncio.create_task(self._mirror_loop())
+            logger.info("[Xavier_care] 身体镜像已启动（每 10 分钟检查，满 2 小时补静息点）")
 
     async def terminate(self) -> None:
         """插件停用/重载时调用：关掉监听、取消 monitor，释放端口。"""
@@ -277,6 +695,15 @@ class HealthBridge(Star):
             except Exception:
                 logger.exception("[Xavier_care] 停止 monitor 时出错")
             self._monitor_task = None
+        if self._mirror_task:
+            self._mirror_task.cancel()
+            try:
+                await self._mirror_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("[Xavier_care] 停止身体镜像定时器时出错")
+            self._mirror_task = None
         await self._stop_server()
 
     def _ensure_auth_token(self) -> None:
@@ -399,6 +826,8 @@ class HealthBridge(Star):
                 return web.json_response({"ok": False, "error": "no usable data"}, status=400)
 
             self._run_cleanup()
+            # 数据共振：只取本次最新一天，后台跑，不阻塞手机上报。
+            self._mirror_schedule_data_resonance(records[-1])
             logger.info(
                 f"[Xavier_care] 已接收并存储 {len(saved_days)} 天数据：{', '.join(saved_days)}"
             )
@@ -700,7 +1129,16 @@ class HealthBridge(Star):
             if not html_path.exists():
                 return web.Response(text="Dashboard template not found", status=404)
             content = html_path.read_text(encoding="utf-8")
-            return web.Response(text=content, content_type="text/html", charset="utf-8")
+            return web.Response(
+                text=content,
+                content_type="text/html",
+                charset="utf-8",
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
         except Exception:
             logger.exception("[Xavier_care] 加载 dashboard 失败")
             return web.Response(text="Internal Error", status=500)
@@ -713,8 +1151,16 @@ class HealthBridge(Star):
                 data["period_status"] = health_logic.compute_period_status(self._data_dir)
             except Exception:
                 logger.exception("[Xavier_care] 推算经期状态失败（不影响其余数据）")
+            try:
+                data["mirror"] = await self._mirror_api_snapshot()
+            except Exception:
+                logger.exception("[Xavier_care] 读取身体镜像失败（不影响其余数据）")
+                data["mirror"] = {"available": False, "status": "读取失败", "points": []}
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            return web.json_response({"ok": True, "data": data, "server_time": now_str})
+            return web.json_response(
+                {"ok": True, "data": data, "server_time": now_str},
+                headers={"Cache-Control": "no-store, max-age=0"},
+            )
         except Exception:
             logger.exception("[Xavier_care] API 获取数据失败")
             return web.json_response({"ok": False, "error": "internal error"}, status=500)
@@ -909,7 +1355,9 @@ class HealthBridge(Star):
         path = Path(__file__).parent / "assets" / name
         if not path.is_file():
             return web.Response(status=404)
-        return web.FileResponse(path)
+        return web.FileResponse(
+            path, headers={"Cache-Control": "no-cache, must-revalidate"}
+        )
 
     # -- 模块二：读取工具 --------------------------------------------------
 

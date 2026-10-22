@@ -158,6 +158,8 @@ class HealthMonitor:
             self._check_late_night(today, alerts)
         if self.config.get("rule_late_night_realtime", True):
             self._check_late_night_realtime(today, alerts)
+        if self.config.get("hr_spike_enabled", False):
+            self._check_hr_spike(today, alerts)
 
         # --- 经期规则（由历史 in_period 标记推算，不依赖今天的传感器数据）---
         period = self._period_status()
@@ -286,6 +288,26 @@ class HealthMonitor:
                 f"心率 {int(latest)} bpm（静息 {int(resting)}），人还醒着。"
             ),
         })
+
+    def _check_hr_spike(self, today, alerts):
+        """心率骤升：90 分钟内涨 >= 30 bpm 算一次。深夜与熬夜提醒重叠时不重复说。"""
+        if any(a.get("type") in ("late_night_realtime", "late_night") for a in alerts):
+            return
+
+        points = health_logic._parse_timeline(today.get("hr_timeline"))
+        for prev, cur in zip(points, points[1:]):
+            gap = self._parse_hhmm(cur["time"]) - self._parse_hhmm(prev["time"])
+            rise = cur["hr"] - prev["hr"]
+            if 0 < gap <= 90 and rise >= 30:
+                alerts.append({
+                    "type": "hr_spike",
+                    "hint": (
+                        f"她 {prev['time']} 心率 {prev['hr']:.0f} bpm，"
+                        f"{cur['time']} 升到 {cur['hr']:.0f} bpm，"
+                        f"短时间里涨了 {rise:.0f}，可能刚活动过或情绪起伏。"
+                    ),
+                })
+                return
 
     def _check_hrv(self, today, history, alerts):
         val = today.get("hrv_ms")

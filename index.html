@@ -9,8 +9,7 @@
   <title>小狗健康</title>
   <link rel="icon" href="/health/assets/兔球球.png" type="image/png">
   <link rel="apple-touch-icon" href="/health/assets/兔球球.png">
-  <!-- 本机用本地 chart.umd.min.js，别改回 CDN（服务器拉不到） -->
-  <script src="/health/assets/chart.umd.min.js"></script>
+  <script src="/health/assets/chart.umd.min.js?v=20261022b"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     html { background-color: #d9c7ff; }
@@ -72,6 +71,18 @@
       box-shadow: 0 3px 10px rgba(156, 123, 255, 0.35);
     }
 
+    /* 顶部状态行 */
+    .status-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding: 0 4px; }
+    .status-time { font-size: 12px; color: #8b86a3; letter-spacing: -0.1px; }
+    .btn-refresh {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 12px; color: #8b6cff;
+      background: #f3eeff; border: 1px solid #e4daff;
+      border-radius: 6px; padding: 3px 8px; cursor: pointer;
+      font-weight: 500; transition: all 0.2s; font-family: inherit;
+    }
+    .btn-refresh:active { transform: scale(0.96); background: #e4daff; }
+
     /* 女性健康卡片 */
     .period-card {
       background: linear-gradient(135deg, #e8dcff 0%, #f3e6ff 55%, #efe0ff 100%);
@@ -92,197 +103,229 @@
     .period-title { font-size: 20px; font-weight: 700; color: #4a2f8f; letter-spacing: -0.3px; }
     .period-desc { font-size: 13px; color: #7a67a8; margin-top: 8px; }
 
-    /* 状态行 */
-    .status-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; padding: 0 4px; }
-    .status-time { font-size: 12px; color: #8b86a3; letter-spacing: -0.1px; }
-    .btn-refresh {
-      display: flex; align-items: center; gap: 4px;
-      font-size: 12px; color: #8b6cff;
-      background: #f3eeff; border: 1px solid #e4daff;
-      border-radius: 6px; padding: 3px 8px; cursor: pointer;
-      font-weight: 500; transition: all 0.2s; font-family: inherit;
+    /* 今日身体概览 */
+    .vitals-card {
+      background: #FFFEFC; border-radius: 24px; padding: 18px 18px 5px;
+      border: 1px solid #EFE9F5; margin-bottom: 14px;
+      box-shadow: 0 5px 20px rgba(130, 110, 170, .06);
     }
-    .btn-refresh:active { transform: scale(0.96); background: #e4daff; }
-
-    /* 四宫格 */
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
-    .card {
-      background: #fff; border-radius: 22px; padding: 18px;
-      box-shadow: 0 6px 20px rgba(150, 120, 255, 0.06);
-      border: 1px solid #f0e9ff;
-      display: flex; flex-direction: column; position: relative; overflow: hidden;
+    .vitals-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .vitals-eyebrow { font-size: 9px; line-height: 1; letter-spacing: .22em; color: #B8ACC8; margin-bottom: 6px; }
+    .vitals-title { font-size: 17px; line-height: 1.2; font-weight: 700; color: #403A4A; letter-spacing: -.01em; }
+    .vitals-meta { flex: 0 0 auto; margin-top: 3px; font-size: 9.5px; color: #AEA5B8; padding: 3px 7px; border-radius: 999px; background: #F8F5FB; }
+    .vitals-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 5px; }
+    .vital { min-width: 0; padding: 14px 0 15px; }
+    .vital:nth-child(odd) { padding-right: 16px; }
+    .vital:nth-child(even) { padding-left: 16px; border-left: 1px solid #F1ECF4; }
+    .vital:nth-child(n+3) { border-top: 1px solid #F1ECF4; }
+    .vital-top { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+    .vital-dot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto; background: #C9B8D9; }
+    .vital.hr .vital-dot { background: #D9A1B0; }
+    .vital.oxygen .vital-dot { background: #8FB9C9; }
+    .vital.steps .vital-dot { background: #9BBFA8; }
+    .vital.sleep .vital-dot { background: #A99BC9; }
+    .vital-label { font-size: 11.5px; color: #8E879A; font-weight: 500; white-space: nowrap; }
+    .vital-value { display: flex; align-items: baseline; gap: 3px; min-width: 0; }
+    .vital-value strong {
+      font-size: 30px; line-height: 1; font-weight: 700; color: #403A4A;
+      letter-spacing: -.045em; font-variant-numeric: tabular-nums;
     }
-    .card::after {
-      content: "✦"; position: absolute; top: 12px; right: 14px;
-      font-size: 12px; color: #ded0ff;
-    }
-    .card-icon { font-size: 24px; margin-bottom: 8px; display: inline-block; }
-    .card-label { font-size: 13px; color: #8c8888; font-weight: 500; margin-bottom: 4px; }
-    .card-value-wrap { display: flex; align-items: baseline; gap: 4px; margin-bottom: 12px; }
-    .card-value {
-      font-size: 28px; font-weight: 700; color: #2a2440; line-height: 1.1;
-      font-variant-numeric: tabular-nums;
-    }
-    .card-unit { font-size: 13px; color: #948dab; font-weight: 500; }
-    .card-subtext {
-      font-size: 11px; color: #b5b0c7; margin-top: auto;
+    .vital-value span { font-size: 10px; color: #A9A1B4; font-weight: 500; }
+    .vital-sub {
+      margin-top: 7px; font-size: 10px; line-height: 1.4; color: #B2AAB9;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
-    /* 宽卡 */
+    /* 活力条 */
+    .activity-strip {
+      display: flex; align-items: center; gap: 11px; margin-bottom: 16px;
+      padding: 13px 16px; border-radius: 18px;
+      background: linear-gradient(135deg, #FFFDF7 0%, #FFFAEE 100%);
+      border: 1px solid #F3E8CF; box-shadow: 0 3px 14px rgba(176, 148, 86, .05);
+    }
+    .activity-mark {
+      flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #FFF1D2; color: #C39A4E; font-size: 13px;
+    }
+    .activity-copy { flex: 1; min-width: 0; }
+    .activity-label { font-size: 12px; font-weight: 600; color: #73603D; }
+    .activity-sub {
+      margin-top: 2px; font-size: 10px; color: #B2A183;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .activity-value { display: flex; align-items: baseline; gap: 2px; flex: 0 0 auto; }
+    .activity-value strong { font-size: 24px; line-height: 1; font-weight: 700; color: #5B4927; font-variant-numeric: tabular-nums; }
+    .activity-value span { font-size: 10px; color: #AE9C79; }
+
+    /* 体重图 */
     .wide-card {
       background: #fff; border-radius: 22px; padding: 18px 20px;
       box-shadow: 0 6px 20px rgba(150, 120, 255, 0.06);
       border: 1px solid #f0e9ff; margin-bottom: 16px;
       position: relative; overflow: hidden;
     }
-    .wide-card::after {
-      content: "✧"; position: absolute; top: 14px; right: 16px;
-      font-size: 14px; color: #ded0ff;
-    }
-    .wide-card .card-icon { margin-bottom: 8px; }
-    .wide-card .card-label { font-size: 13px; color: #8c8888; margin-bottom: 4px; }
-    .wide-card .card-value-wrap { margin-bottom: 10px; }
-    .wide-card .card-subtext { font-size: 11px; color: #b5b0c7; }
-
-    /* 空状态 */
-    .empty-state { text-align: center; padding: 30px 0 10px; color: #b0a9c6; font-size: 13px; }
-    .empty-state img {
-      width: 120px; height: 120px; object-fit: contain;
-      opacity: 0.85; margin-bottom: 10px;
-      filter: drop-shadow(0 4px 12px rgba(156, 123, 255, 0.2));
-    }
-
-    /* 体重图 */
     .chart-wrap { position: relative; width: 100%; height: 220px; margin-top: 10px; }
+    .empty-state { text-align: center; padding: 30px 0 10px; color: #b0a9c6; font-size: 13px; }
+
+    /* ====== 心率页专属 ====== */
+    #hrView { color: #77717A; }
+    
+    /* 双人卡片 */
+    .hr-couple {
+      position: relative; overflow: hidden; margin-bottom: 16px;
+      padding: 18px 16px 14px; border-radius: 22px;
+      background: #fff; border: 1px solid #f0e9ff;
+      box-shadow: 0 6px 20px rgba(150, 120, 255, 0.06);
+    }
+    .hr-couple::after { content: "✦"; position: absolute; right: 18px; top: 14px; color: #ded0ff; font-size: 14px; }
+    .hr-couple-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 12px; }
+    .hr-couple-head-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .hr-refresh-btn {
+      width: 24px; height: 24px; padding: 0; flex: 0 0 auto;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid #e7defa; border-radius: 50%;
+      background: #fff; color: #9a85c9;
+      font-size: 15px; line-height: 1; cursor: pointer;
+      transition: transform .15s ease, background .15s ease, opacity .15s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .hr-refresh-btn:active { transform: scale(.92); background: #f5f0ff; }
+    .hr-refresh-btn:disabled { opacity: .6; cursor: default; }
+    .hr-refresh-btn .hr-refresh-icon { display: inline-block; }
+    .hr-refresh-btn.is-loading .hr-refresh-icon { animation: hr-refresh-spin .8s linear infinite; }
+    @keyframes hr-refresh-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .hr-refresh-btn.is-loading .hr-refresh-icon { animation: none; }
+    }
+    .hr-couple-title { font-size: 13px; font-weight: 600; color: #8c8888; letter-spacing: .1em; }
+    .hr-couple-date { font-size: 11px; color: #b5b0c7; }
+    .hr-couple-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+    .hr-person { min-width: 0; padding: 12px 14px 10px; border-radius: 16px; border: 1px solid #f8f4fc; }
+    .hr-person.him { background: linear-gradient(180deg, rgba(246,241,255,.72), rgba(255,255,255,0)); }
+    .hr-person.me { background: linear-gradient(180deg, rgba(255,244,238,.72), rgba(255,255,255,0)); }
+    .hr-person-name { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 700; color: #4a415e; }
+    .hr-person.him .hr-heart { color: #e8b44a; }
+    .hr-person.me .hr-heart { color: #ff8da6; }
+    .hr-heart { font-size: 11px; line-height: 1; }
+    .hr-person-main { display: flex; align-items: flex-end; gap: 5px; margin-top: 5px; }
+    .hr-person-value { font-size: 34px; line-height: .95; font-weight: 700; color: #433521; font-variant-numeric: tabular-nums; letter-spacing: -1.5px; }
+    .hr-person-unit { font-size: 10px; color: #b3a58a; margin-bottom: 5px; }
+    .hr-person-meta {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 4px;
+      margin-top: 8px; font-size: 10px; line-height: 1.4; color: #a9a0b8;
+    }
+    .hr-person-meta b { font-weight: 600; color: #5d5672; font-variant-numeric: tabular-nums; }
+    .hr-person-state { display: flex; align-items: center; gap: 5px; margin-top: 6px; font-size: 10px; color: #8e86a0; }
+    .hr-person-state .dot { width: 6px; height: 6px; border-radius: 50%; background: #c9c2dc; flex: 0 0 auto; }
+    .hr-person-state .dot.ok { background: #8bd3a1; box-shadow: 0 0 0 3px rgba(139,211,161,.14); }
+    .hr-person-state .dot.warn { background: #e8c46a; box-shadow: 0 0 0 3px rgba(232,196,106,.14); }
+    .hr-state-steps { margin-left: auto; color: #b1a8b8; font-size: 9px; }
+    .hr-state-steps b { color: #8b8295; }
+
+    /* 图表卡片 */
+    .hr-chart-card-legacy {
+      background: #fff; border-radius: 22px; padding: 16px 16px 12px;
+      border: 1px solid #f0e9ff; margin-bottom: 16px;
+      box-shadow: 0 6px 20px rgba(150, 120, 255, 0.06);
+      min-height: 260px;
+    }
+    #hrView .hr-chart-wrap { height: 220px; margin-top: 6px; }
+    .chart-skeleton { position: absolute; inset: 12px 0 0; z-index: 2; display: flex; flex-direction: column; justify-content: space-around; padding: 20px 8%; background: #fff; }
+    .chart-skeleton .sk-bar { height: 10px; border-radius: 999px; background: linear-gradient(90deg, #f4efff 25%, #fbf9ff 50%, #f4efff 75%); background-size: 200% 100%; animation: sk-shimmer 1.2s infinite; }
+    @keyframes sk-shimmer { to { background-position: -200% 0; } }
+    .hr-empty { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: #fff; color: #b0a9c6; font-size: 12px; text-align: center; padding: 20px; }
+
+    /* 心跳瞬间卡片 */
+    .hr-moment-card {
+      display: none; position: relative; margin-bottom: 16px;
+      padding: 14px 16px 15px; border-radius: 20px;
+      background: linear-gradient(180deg, #FFFDF8 0%, #FFFFFF 62%);
+      border: 1px solid #F3E7CE;
+      box-shadow: 0 6px 20px rgba(201, 164, 95, 0.10);
+    }
+    .hr-moment-card.show { display: block; animation: momentIn .2s ease-out; }
+    @keyframes momentIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .hr-moment-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .hr-moment-title { font-size: 12px; letter-spacing: .08em; color: #A98A4E; }
+    .hr-moment-title::before { content: "✦"; margin-right: 5px; color: #C9A45F; }
+    .hr-moment-close {
+      border: 0; background: transparent; color: #BDB4A2;
+      font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer;
+      border-radius: 8px;
+    }
+    .hr-moment-close:active { background: #FBF4E4; }
+    .hr-moment-main { display: flex; align-items: baseline; gap: 8px; }
+    .hr-moment-time { font-size: 13px; color: #8E8798; font-variant-numeric: tabular-nums; }
+    .hr-moment-hr { font-size: 26px; font-weight: 600; color: #514B54; letter-spacing: .01em; }
+    .hr-moment-hr small { font-size: 11px; font-weight: 400; color: #A9A2B4; margin-left: 2px; }
+    .hr-moment-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .hr-moment-tag {
+      display: inline-flex; align-items: center;
+      padding: 3px 9px; border-radius: 999px;
+      font-size: 11px; color: #9A7433;
+      background: #FFF4DE; border: 1px solid #F2DFB8;
+    }
+    .hr-moment-reason {
+      margin-top: 10px; font-size: 13px; line-height: 1.65; color: #6C6474;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+      overflow: hidden; cursor: pointer; word-break: break-word;
+    }
+    .hr-moment-reason.open { display: block; -webkit-line-clamp: unset; }
+    .hr-moment-reason.empty { color: #B6AFC4; }
 
     /* 日历卡片 */
-    .cal-card {
-      background: #fff; border-radius: 22px; padding: 18px 16px 14px;
-      box-shadow: 0 6px 20px rgba(150, 120, 255, 0.06);
-      border: 1px solid #f0e9ff; margin-bottom: 16px;
-      position: relative; overflow: hidden;
-    }
-    .cal-card::after {
-      content: ""; position: absolute;
-      right: -60px; bottom: -60px;
-      width: 260px; height: 260px;
-      background: url("/health/assets/兔球球.png") no-repeat center / contain;
-      opacity: 0.20; pointer-events: none;
-    }
+    .cal-card { background: #fff; border-radius: 22px; padding: 18px 16px 14px; box-shadow: 0 6px 20px rgba(150, 120, 255, 0.06); border: 1px solid #f0e9ff; margin-bottom: 16px; position: relative; overflow: hidden; }
     .cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
     .cal-nav .month { font-size: 17px; font-weight: 700; color: #4a2f8f; }
-    .cal-nav button {
-      width: 34px; height: 34px; border-radius: 50%;
-      border: 1px solid #e4daff; background: #f7f3ff;
-      color: #7d63c4; font-size: 18px; cursor: pointer;
-      font-family: inherit; line-height: 1;
-      display: flex; align-items: center; justify-content: center;
-    }
+    .cal-nav button { width: 34px; height: 34px; border-radius: 50%; border: 1px solid #e4daff; background: #f7f3ff; color: #7d63c4; font-size: 18px; cursor: pointer; font-family: inherit; line-height: 1; display: flex; align-items: center; justify-content: center; }
     .cal-nav button:active { background: #e4daff; }
     .cal-nav .today-btn { width: auto; padding: 0 12px; border-radius: 10px; font-size: 13px; height: 30px; }
-
     .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: #8b86a3; margin-bottom: 10px; position: relative; z-index: 1; }
     .legend span { display: flex; align-items: center; gap: 4px; }
     .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
     .legend .dot-mark { background: #f06292; }
     .legend .dot-pred { background: #f8bbd0; }
-
-    .cal-week {
-      display: grid; grid-template-columns: repeat(7, 1fr);
-      text-align: center; font-size: 11px; color: #b5b0c7;
-      margin-bottom: 4px; position: relative; z-index: 1;
-    }
-    .cal-grid {
-      display: grid; grid-template-columns: repeat(7, 1fr);
-      gap: 2px; position: relative; z-index: 1;
-    }
-    .cal-cell {
-      aspect-ratio: 1 / 1;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      border-radius: 50%;
-      font-size: 14px; color: #2a2440;
-      cursor: pointer; position: relative;
-      transition: background 0.15s;
-    }
+    .cal-week { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 11px; color: #b5b0c7; margin-bottom: 4px; position: relative; z-index: 1; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; position: relative; z-index: 1; }
+    .cal-cell { aspect-ratio: 1 / 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; font-size: 14px; color: #2a2440; cursor: pointer; position: relative; transition: background 0.15s; }
     .cal-cell.empty { cursor: default; }
     .cal-cell:not(.empty):active { background: #f3eeff; }
     .cal-cell.today { box-shadow: inset 0 0 0 2px #9c7bff; font-weight: 700; }
-    .cal-cell.marked {
-      background: linear-gradient(135deg, #f48fb1, #f06292);
-      color: #fff; font-weight: 700;
-      box-shadow: 0 2px 8px rgba(240, 98, 146, 0.35);
-    }
+    .cal-cell.marked { background: linear-gradient(135deg, #f48fb1, #f06292); color: #fff; font-weight: 700; box-shadow: 0 2px 8px rgba(240, 98, 146, 0.35); }
     .cal-cell.pred { background: #fce4ec; color: #c2185b; }
-    .cal-cell .dot {
-      position: absolute; bottom: 5px;
-      width: 4px; height: 4px; border-radius: 50%;
-    }
+    .cal-cell .dot { position: absolute; bottom: 5px; width: 4px; height: 4px; border-radius: 50%; }
     .cal-cell.marked .dot { background: #fff; }
-
-    /* 底部状态小卡 */
-    .period-status {
-      background: linear-gradient(135deg, #e8dcff 0%, #f3e6ff 55%, #efe0ff 100%);
-      border-radius: 22px; padding: 16px 20px;
-      box-shadow: 0 6px 20px rgba(167, 139, 250, 0.18);
-      border: 1px solid rgba(255,255,255,0.7);
-      font-size: 13px; color: #4a2f8f; line-height: 1.9;
-    }
+    .period-status { background: linear-gradient(135deg, #e8dcff 0%, #f3e6ff 55%, #efe0ff 100%); border-radius: 22px; padding: 16px 20px; box-shadow: 0 6px 20px rgba(167, 139, 250, 0.18); border: 1px solid rgba(255,255,255,0.7); font-size: 13px; color: #4a2f8f; line-height: 1.9; }
     .period-status .big { font-size: 18px; font-weight: 700; color: #4a2f8f; margin-bottom: 6px; }
     .period-status .row { display: flex; justify-content: space-between; }
 
     /* 弹窗 */
-    .modal-mask {
-      position: fixed; inset: 0;
-      background: rgba(40, 30, 60, 0.35);
-      display: none; align-items: center; justify-content: center;
-      z-index: 100; padding: 20px;
-    }
+    .modal-mask { position: fixed; inset: 0; background: rgba(40, 30, 60, 0.35); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
     .modal-mask.show { display: flex; }
-    .modal {
-      background: #fff; border-radius: 20px; width: 100%; max-width: 320px;
-      padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-    }
+    .modal { background: #fff; border-radius: 20px; width: 100%; max-width: 320px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
     .modal h3 { font-size: 16px; color: #4a2f8f; margin-bottom: 4px; }
     .modal .date-str { font-size: 13px; color: #8b86a3; margin-bottom: 16px; }
-    .modal button {
-      width: 100%; padding: 11px 0; border-radius: 12px;
-      font-size: 14px; font-weight: 500; cursor: pointer;
-      font-family: inherit; border: none; margin-bottom: 8px;
-    }
+    .modal button { width: 100%; padding: 11px 0; border-radius: 12px; font-size: 14px; font-weight: 500; cursor: pointer; font-family: inherit; border: none; margin-bottom: 8px; }
     .modal .btn-mark { background: linear-gradient(135deg, #f48fb1, #f06292); color: #fff; }
     .modal .btn-unmark { background: #f3eeff; color: #7d63c4; border: 1px solid #e4daff; }
     .modal .btn-cancel { background: #f7f7fa; color: #8b86a3; margin-bottom: 0; }
-    /* 奶茶日历 */
     .cal-cell.mt-hit { background: #f6efff; border-radius: 10px; }
-    .mt-count {
-      font-size: 9px; line-height: 1.3; color: #fff; background: #c08ad4;
-      border-radius: 8px; padding: 0 5px; margin-top: 2px;
-    }
+    .mt-count { font-size: 9px; line-height: 1.3; color: #fff; background: #c08ad4; border-radius: 8px; padding: 0 5px; margin-top: 2px; }
     .mt-empty { font-size: 12px; color: #b0a6c4; text-align: center; padding: 14px 0; }
     .mt-item { background: #faf7ff; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; text-align: left; }
     .mt-item .mt-head { font-size: 14px; font-weight: 600; color: #3a2f57; overflow: hidden; }
     .mt-item .mt-meta { font-size: 12px; color: #7d63c4; margin-top: 4px; }
     .mt-item .mt-note { font-size: 12px; color: #6b6280; margin-top: 5px; line-height: 1.5; }
-    .mt-del { float: right; font-size: 11px; color: #b47ba8; background: #fff;
-      border: 1px solid #eadff5; border-radius: 8px; padding: 2px 8px; cursor: pointer; font-family: inherit; }
+    .mt-del { float: right; font-size: 11px; color: #b47ba8; background: #fff; border: 1px solid #eadff5; border-radius: 8px; padding: 2px 8px; cursor: pointer; font-family: inherit; }
     .mt-form { display: none; text-align: left; margin-top: 10px; }
     .mt-form.show { display: block; }
-    .mt-form input, .mt-form select {
-      width: 100%; box-sizing: border-box; margin-bottom: 7px; padding: 8px 10px;
-      border: 1px solid #e6dcf5; border-radius: 10px; font-size: 13px;
-      font-family: inherit; color: #3a2f57; background: #fff;
-    }
+    .mt-form input, .mt-form select { width: 100%; box-sizing: border-box; margin-bottom: 7px; padding: 8px 10px; border: 1px solid #e6dcf5; border-radius: 10px; font-size: 13px; font-family: inherit; color: #3a2f57; background: #fff; }
     .mt-row2 { display: flex; gap: 7px; }
     .mt-row2 input, .mt-row2 select { flex: 1; min-width: 0; }
-    .mt-add { width: 100%; margin-top: 8px; padding: 9px; border-radius: 12px;
-      border: 1px dashed #d9c7ff; background: #faf7ff; color: #7d63c4;
-      font-size: 13px; font-family: inherit; cursor: pointer; }
-    .mt-submit { width: 100%; padding: 10px; border: none; border-radius: 12px;
-      cursor: pointer; background: #9c7bff; color: #fff; font-size: 14px; font-family: inherit; }
+    .mt-add { width: 100%; margin-top: 8px; padding: 9px; border-radius: 12px; border: 1px dashed #d9c7ff; background: #faf7ff; color: #7d63c4; font-size: 13px; font-family: inherit; cursor: pointer; }
+    .mt-submit { width: 100%; padding: 10px; border: none; border-radius: 12px; cursor: pointer; background: #9c7bff; color: #fff; font-size: 14px; font-family: inherit; }
     .mt-sub { font-size: 11px; color: #a99cc2; text-align: center; margin-top: 10px; }
-
   </style>
 </head>
 <body>
@@ -298,7 +341,6 @@
   </div>
 
   <div class="page">
-
     <div class="header">
       <div class="header-title">
         <img class="logo" src="/health/assets/兔球球.png" alt="logo">
@@ -309,6 +351,7 @@
     <div class="view-tabs">
       <button class="view-tab active" data-view="today" onclick="switchView('today')">今日</button>
       <button class="view-tab" data-view="weight" onclick="switchView('weight')">体重</button>
+      <button class="view-tab" data-view="hr" onclick="switchView('hr')">心率</button>
       <button class="view-tab" data-view="calendar" onclick="switchView('calendar')">日历</button>
     </div>
 
@@ -330,61 +373,50 @@
       </div>
 
       <div class="empty-state" id="emptyState" style="display:none;">
-        <img src="/health/assets/星际小宝.png" alt="">
+        <img src="/health/assets/星际小宝.png" alt="" style="width:120px;opacity:0.85;margin-bottom:10px;">
         <div>还没有收到身体数据哦～</div>
       </div>
 
       <div id="dataArea" style="display:none;">
-        <div class="grid">
-          <div class="card">
-            <div class="card-icon">❤️</div>
-            <div class="card-label">心率</div>
-            <div class="card-value-wrap">
-              <div class="card-value" id="valHr">--</div>
-              <div class="card-unit">bpm</div>
+        <div class="vitals-card">
+          <div class="vitals-head">
+            <div>
+              <div class="vitals-eyebrow">TODAY</div>
+              <div class="vitals-title">今日身体</div>
             </div>
-            <div class="card-subtext" id="subHr">静息 -- · 步行 --</div>
+            <div class="vitals-meta">4 项指标</div>
           </div>
-
-          <div class="card">
-            <div class="card-icon">🫁</div>
-            <div class="card-label">血氧</div>
-            <div class="card-value-wrap">
-              <div class="card-value" id="valOxygen">--</div>
-              <div class="card-unit">%</div>
+          <div class="vitals-grid">
+            <div class="vital hr">
+              <div class="vital-top"><span class="vital-dot"></span><span class="vital-label">心率</span></div>
+              <div class="vital-value"><strong id="valHr">--</strong><span>bpm</span></div>
+              <div class="vital-sub" id="subHr">静息 -- · 步行 --</div>
             </div>
-            <div class="card-subtext" id="subOxygen">最近一次读数</div>
-          </div>
-
-          <div class="card">
-            <div class="card-icon">🐾</div>
-            <div class="card-label">今日步数</div>
-            <div class="card-value-wrap">
-              <div class="card-value" id="valSteps">--</div>
-              <div class="card-unit">步</div>
+            <div class="vital oxygen">
+              <div class="vital-top"><span class="vital-dot"></span><span class="vital-label">血氧</span></div>
+              <div class="vital-value"><strong id="valOxygen">--</strong><span>%</span></div>
+              <div class="vital-sub" id="subOxygen">最近一次读数</div>
             </div>
-            <div class="card-subtext" id="subSteps">-- km</div>
-          </div>
-
-          <div class="card">
-            <div class="card-icon">😴</div>
-            <div class="card-label">昨晚睡眠</div>
-            <div class="card-value-wrap">
-              <div class="card-value" id="valSleepHrs">--</div>
-              <div class="card-unit">小时</div>
+            <div class="vital steps">
+              <div class="vital-top"><span class="vital-dot"></span><span class="vital-label">今日步数</span></div>
+              <div class="vital-value"><strong id="valSteps">--</strong><span>步</span></div>
+              <div class="vital-sub" id="subSteps">-- km</div>
             </div>
-            <div class="card-subtext" id="subSleep">--</div>
+            <div class="vital sleep">
+              <div class="vital-top"><span class="vital-dot"></span><span class="vital-label">昨晚睡眠</span></div>
+              <div class="vital-value"><strong id="valSleepHrs">--</strong><span>小时</span></div>
+              <div class="vital-sub" id="subSleep">--</div>
+            </div>
           </div>
         </div>
 
-        <div class="wide-card">
-          <div class="card-icon">🌟</div>
-          <div class="card-label">活力指标 (中高强度)</div>
-          <div class="card-value-wrap">
-            <div class="card-value" id="valExercise">--</div>
-            <div class="card-unit">分钟</div>
+        <div class="activity-strip">
+          <span class="activity-mark">✦</span>
+          <div class="activity-copy">
+            <div class="activity-label">活力指标</div>
+            <div class="activity-sub" id="subExercise">今日中高强度活动</div>
           </div>
-          <div class="card-subtext" id="subExercise">今日中高强度活动</div>
+          <div class="activity-value"><strong id="valExercise">--</strong><span>分钟</span></div>
         </div>
       </div>
     </div>
@@ -392,12 +424,12 @@
     <!-- ====== 体重 ====== -->
     <div id="weightView" style="display:none;">
       <div class="wide-card">
-        <div class="card-icon">⚖️</div>
-        <div class="card-label">体重趋势（kg）</div>
+        <div class="card-icon" style="font-size:24px;margin-bottom:8px;">⚖️</div>
+        <div class="card-label" style="font-size:13px;color:#8c8888;">体重趋势（kg）</div>
         <div class="chart-wrap">
           <canvas id="weightChart"></canvas>
         </div>
-        <div class="card-subtext" id="weightSummary" style="margin-top:10px;">加载中…</div>
+        <div class="card-subtext" id="weightSummary" style="margin-top:10px;font-size:11px;color:#b5b0c7;">加载中…</div>
       </div>
 
       <div class="cal-card" style="margin-top:14px;">
@@ -412,6 +444,82 @@
         <div class="cal-grid" id="mtGrid"></div>
         <div class="mt-sub" id="mtSummary"></div>
       </div>
+    </div>
+
+    <!-- ====== 心率（极简版：只留双人卡片和折线图） ====== -->
+    <div id="hrView" style="display:none;">
+      <section class="hr-couple" aria-label="双人对照">
+        <div class="hr-couple-head">
+          <div class="hr-couple-head-left">
+            <button class="hr-refresh-btn" id="hrRefreshBtn" type="button"
+                    aria-label="刷新心率数据" title="刷新心率数据"
+                    onclick="refreshHrPage()">
+              <span class="hr-refresh-icon" aria-hidden="true">↻</span>
+            </button>
+            <span class="hr-couple-title">此刻</span>
+          </div>
+          <span class="hr-couple-date">今天</span>
+        </div>
+        <div class="hr-couple-grid">
+          <div class="hr-person him">
+            <div class="hr-person-name"><span class="hr-heart">✦</span><span id="coupleHimName">沈星回</span></div>
+            <div class="hr-person-main">
+              <span class="hr-person-value" id="coupleHimHr">--</span>
+              <span class="hr-person-unit">bpm</span>
+            </div>
+            <div class="hr-person-meta">
+              <span>静息 <b id="coupleHimRest">--</b></span>
+              <span>睡眠 <b id="coupleHimSleep">--</b></span>
+            </div>
+            <div class="hr-person-state">
+              <span class="dot" id="coupleHimDot"></span>
+              <span class="hr-state-text" id="coupleHimState">—</span>
+              <span class="hr-state-steps">步数 <b id="coupleHimSteps">--</b></span>
+            </div>
+          </div>
+          <div class="hr-person me">
+            <div class="hr-person-name"><span class="hr-heart">♡</span><span>我</span></div>
+            <div class="hr-person-main">
+              <span class="hr-person-value" id="coupleMeHr">--</span>
+              <span class="hr-person-unit">bpm</span>
+            </div>
+            <div class="hr-person-meta">
+              <span>静息 <b id="coupleMeRest">--</b></span>
+              <span>睡眠 <b id="coupleMeSleep">--</b></span>
+            </div>
+            <div class="hr-person-state">
+              <span class="dot" id="coupleMeDot"></span>
+              <span class="hr-state-text" id="coupleMeState">—</span>
+              <span class="hr-state-steps">步数 <b id="coupleMeSteps">--</b></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="hr-chart-card-legacy">
+        <div class="chart-wrap hr-chart-wrap">
+          <canvas id="hrChart"></canvas>
+          <div class="chart-skeleton" id="hrChartSkeleton">
+            <div class="sk-bar" style="width:38%"></div>
+            <div class="sk-bar" style="width:72%"></div>
+            <div class="sk-bar" style="width:54%"></div>
+          </div>
+          <div class="hr-empty" id="hrEmpty" style="display:none;">今天的心跳，还没写下第一行</div>
+        </div>
+      </section>
+
+      <section class="hr-moment-card" id="hrMomentCard" aria-live="polite">
+        <div class="hr-moment-head">
+          <span class="hr-moment-title">心跳瞬间</span>
+          <button class="hr-moment-close" id="hrMomentClose" type="button" aria-label="收起">×</button>
+        </div>
+        <div class="hr-moment-main">
+          <span class="hr-moment-time" id="hrMomentTime">--:--</span>
+          <span class="hr-moment-hr"><b id="hrMomentHr">--</b><small>bpm</small></span>
+        </div>
+        <div class="hr-moment-tags" id="hrMomentTags"></div>
+        <div class="hr-moment-reason" id="hrMomentReason"></div>
+      </section>
     </div>
 
     <!-- ====== 日历 ====== -->
@@ -493,7 +601,11 @@
 
   <script>
     let weightChart = null;
+    let hrChart = null;
+    let selectedHimIndex = -1;
     let currentView = "today";
+    let latestHealthData = {};
+    let latestMirror = {};
 
     // ========== 视图切换 ==========
     function switchView(view) {
@@ -504,9 +616,12 @@
 
       document.getElementById("todayView").style.display = view === "today" ? "block" : "none";
       document.getElementById("weightView").style.display = view === "weight" ? "block" : "none";
+      document.getElementById("hrView").style.display = view === "hr" ? "block" : "none";
       document.getElementById("calendarView").style.display = view === "calendar" ? "block" : "none";
 
       if (view === "weight") { loadWeightChart(); loadMtMonth(); }
+      if (view === "hr") { loadHrChart({ showSkeleton: !hrChart }); startHrAutoRefresh(); }
+      else { stopHrAutoRefresh(); }
       if (view === "calendar") loadCalendar();
     }
 
@@ -518,7 +633,12 @@
         const resp = await fetch("/health/api/data?t=" + Date.now());
         if (!resp.ok) throw new Error("Network error");
         const res = await resp.json();
-        if (res.ok) renderData(res.data || {});
+        if (res.ok) {
+          const d = res.data || {};
+          latestHealthData = d;
+          renderData(d);
+          renderMirror(d.mirror);
+        }
       } catch (e) {
         console.error("加载数据失败", e);
         const st = document.getElementById("statusTime");
@@ -544,7 +664,6 @@
       document.getElementById("statusTime").textContent = recvAt ? `数据接收于 ${recvAt}` : "暂无数据";
       if (!hasData) return;
 
-      // 经期 + 预测
       const ps = data.period_status || {};
       const nextStr = fmtMonthDay(ps.next_start_date);
       const periodTitle = document.getElementById("periodTitle");
@@ -565,20 +684,18 @@
         periodDesc.textContent = "暂无经期数据";
       }
 
-      // 心率
       const latest = data.latest_hr != null ? Math.round(data.latest_hr) : null;
       const rest = data.resting_hr ? Math.round(data.resting_hr) : null;
       const walk = data.walking_hr ? Math.round(data.walking_hr) : null;
-      const hrVal = latest ?? rest ?? walk;
+      const hrVal = latest != null ? latest : (rest != null ? rest : walk);
       if (hrVal != null) {
         document.getElementById("valHr").textContent = hrVal;
-        document.getElementById("subHr").textContent = `静息 ${rest ?? "--"} · 步行 ${walk ?? "--"}`;
+        document.getElementById("subHr").textContent = `静息 ${rest != null ? rest : "--"} · 步行 ${walk != null ? walk : "--"}`;
       } else {
         document.getElementById("valHr").textContent = "--";
         document.getElementById("subHr").textContent = "暂无心率数据";
       }
 
-      // 血氧
       if (data.blood_oxygen_pct != null) {
         document.getElementById("valOxygen").textContent = Math.round(data.blood_oxygen_pct);
         document.getElementById("subOxygen").textContent = "最近一次读数";
@@ -587,7 +704,6 @@
         document.getElementById("subOxygen").textContent = "暂无血氧数据";
       }
 
-      // 步数
       if (data.steps != null) {
         document.getElementById("valSteps").textContent = Math.round(data.steps);
         const dist = data.distance_km != null ? Number(data.distance_km).toFixed(2) : "--";
@@ -597,24 +713,20 @@
         document.getElementById("subSteps").textContent = "暂无步数数据";
       }
 
-      // 睡眠
       if (data.sleep && data.sleep.duration_min) {
         const dur = data.sleep.duration_min;
         document.getElementById("valSleepHrs").textContent = (dur / 60).toFixed(1);
         const bed = data.sleep.bedtime, wake = data.sleep.wake_time;
-        document.getElementById("subSleep").textContent =
-          bed && wake ? `${bed} 入睡 · ${wake} 醒` : "昨晚睡眠";
+        document.getElementById("subSleep").textContent = bed && wake ? `${bed} 入睡 · ${wake} 醒` : "昨晚睡眠";
       } else {
         document.getElementById("valSleepHrs").textContent = "--";
         document.getElementById("subSleep").textContent = "暂无睡眠数据";
       }
 
-      // 活力
       const exMin = (data.activity && data.activity.exercise_min) || 0;
       const standHr = (data.activity && data.activity.stand_hr) || 0;
       document.getElementById("valExercise").textContent = Math.round(exMin);
-      document.getElementById("subExercise").textContent =
-        `今日中高强度活动 · 站立 ${standHr} 小时`;
+      document.getElementById("subExercise").textContent = `今日中高强度活动 · 站立 ${standHr} 小时`;
     }
 
     // ========== 体重 ==========
@@ -670,24 +782,487 @@
       }
     }
 
-    // ========== 日历 ==========
-    let viewYear, viewMonth;
-    let calDays = {};       // { "YYYY-MM-DD": bool }
-    let calStatus = {};     // period_status
-    let selectedDate = null;
+    // ========== 心率走势 ==========
+    let hrRefreshTimer = null;
+    let hrManualRefreshing = false;
 
+    function hmToMin(hm) {
+      const m = String(hm || "").match(/^(\d{1,2}):(\d{2})$/);
+      return m ? Math.max(0, Math.min(1439, (+m[1]) * 60 + (+m[2]))) : 0;
+    }
+    function minToHm(v) {
+      const n = Math.max(0, Math.min(1439, Math.round(Number(v) || 0)));
+      return `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+    }
+
+    function fmtDurationCN(min) {
+      const n = Number(min);
+      if (!Number.isFinite(n) || n <= 0) return "--";
+      const total = Math.round(n);
+      const h = Math.floor(total / 60);
+      const m = total % 60;
+      return m ? `${h}h${String(m).padStart(2, "0")}m` : `${h}h`;
+    }
+
+    function fmtSteps(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : "--";
+    }
+
+    function relativeTime(iso) {
+      if (!iso) return { text: "暂无数据", tone: "idle" };
+      const ms = Date.parse(String(iso).replace(" ", "T"));
+      if (!Number.isFinite(ms)) return { text: "暂无数据", tone: "idle" };
+      const diffMin = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+      let text;
+      if (diffMin < 1) text = "刚刚";
+      else if (diffMin < 60) text = `${diffMin} 分钟前`;
+      else if (diffMin < 1440) text = `${Math.floor(diffMin / 60)} 小时前`;
+      else {
+        const d = new Date(ms);
+        text = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+      }
+      const tone = diffMin < 10 ? "ok" : (diffMin < 60 ? "warn" : "idle");
+      return { text, tone };
+    }
+
+    function renderCoupleCard(data, mirror) {
+      data = data || {};
+      mirror = mirror || {};
+      const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+      const asInt = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n) : null; };
+      const setDot = (id, tone) => {
+        const el = document.getElementById(id);
+        if (el) el.className = "dot" + (tone && tone !== "idle" ? " " + tone : "");
+      };
+
+      const meRest = asInt(data.resting_hr);
+      let meHr = asInt(data.latest_hr);
+      if (meHr == null) meHr = meRest;
+      if (meHr == null) meHr = asInt(data.walking_hr);
+      set("coupleMeHr", meHr != null ? meHr : "--");
+      set("coupleMeRest", meRest != null ? meRest : "--");
+      set("coupleMeSleep", fmtDurationCN(data.sleep && data.sleep.duration_min));
+      set("coupleMeSteps", fmtSteps(data.steps));
+      const meState = relativeTime(data._received_at);
+      set("coupleMeState", meState.text === "刚刚" ? "刚刚更新" : (meState.text === "暂无数据" ? "等待更新" : meState.text));
+      setDot("coupleMeDot", meState.tone);
+
+      const himOk = !!mirror.available && asInt(mirror.current_hr) != null;
+      set("coupleHimName", String(mirror.name || "").trim() || "沈星回");
+      const himHr = himOk ? asInt(mirror.current_hr) : null;
+      set("coupleHimHr", himHr != null ? himHr : "--");
+      const himRest = himOk ? asInt(mirror.resting_hr) : null;
+      set("coupleHimRest", himRest != null ? himRest : "--");
+      set("coupleHimSleep", fmtDurationCN(mirror.sleep_min));
+      set("coupleHimSteps", himOk ? fmtSteps(mirror.steps) : "--");
+      set("coupleHimState", himOk ? "在线" : "未同步");
+      setDot("coupleHimDot", himOk ? "ok" : "idle");
+    }
+
+    function renderMirror(m) {
+      latestMirror = m || {};
+      renderCoupleCard(latestHealthData, latestMirror);
+    }
+
+    async function loadHrChart(opts = {}) {
+      const showSkeleton = opts.showSkeleton === true;
+      const skeleton = document.getElementById("hrChartSkeleton");
+      const empty = document.getElementById("hrEmpty");
+
+      if (showSkeleton && skeleton && !hrChart) skeleton.style.display = "flex";
+
+      try {
+        const resp = await fetch("/health/api/data?t=" + Date.now());
+        if (!resp.ok) throw new Error("Network error");
+        const res = await resp.json();
+        if (!res || !res.ok) throw new Error("API error");
+        const data = res.data || {};
+        latestHealthData = data;
+        const mirror = data.mirror || {};
+        renderMirror(mirror);
+        renderCoupleCard(data, mirror);
+
+        const raw = Array.isArray(data.hr_timeline) ? data.hr_timeline : [];
+        const realPts = raw
+          .filter(p => p && p.time && p.hr != null)
+          .map(p => ({ x: hmToMin(p.time), y: Number(p.hr), time: p.time }))
+          .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+          .sort((a, b) => a.x - b.x);
+
+        const himAll = (Array.isArray(mirror.points) ? mirror.points : [])
+          .filter(p => p && p.hr != null)
+          .map(p => ({
+            x: Number(p.x), y: Number(p.hr), hr: Number(p.hr), time: p.time,
+            source: p.source || "dialog",
+            reason: p.reason || "",
+            whisper: p.whisper || "",
+            emotion: p.emotion || "",
+            emotionIntensity: Number.isFinite(Number(p.emotion_intensity)) ? Number(p.emotion_intensity) : 0
+          }))
+          .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+          .sort((a, b) => a.x - b.x);
+
+        if (!realPts.length && !himAll.length) {
+          if (hrChart) { hrChart.destroy(); hrChart = null; }
+          hideMomentCard();
+          if (empty) { empty.textContent = "今天的心跳，还没写下第一行"; empty.style.display = "flex"; }
+          if (skeleton) skeleton.style.display = "none";
+          return;
+        }
+        if (empty) empty.style.display = "none";
+
+        const ctx = document.getElementById("hrChart").getContext("2d");
+        if (hrChart) hrChart.destroy();
+        
+        // 阴影渐变
+        const meFill = ctx.createLinearGradient(0, 0, 0, 240);
+        meFill.addColorStop(0, "rgba(217, 161, 176, .22)");
+        meFill.addColorStop(.72, "rgba(217, 161, 176, .05)");
+        meFill.addColorStop(1, "rgba(217, 161, 176, 0)");
+        
+        // 发光插件
+        const hrGlow = {
+          id: "hrGlow",
+          beforeDatasetDraw(chart, args) {
+            const c = chart.ctx;
+            c.save();
+            c.shadowColor = args.index === 0 ? "rgba(217,161,176,.34)" : "rgba(201,164,95,.38)";
+            c.shadowBlur = 7;
+            c.shadowOffsetY = 1;
+          },
+          afterDatasetDraw(chart) { chart.ctx.restore(); },
+        };
+        
+        // 垂直辅助线插件（线在曲线下方，点在上方）
+        const hrCrosshair = {
+          id: "hrCrosshair",
+          beforeDatasetsDraw(chart) {
+            const point = chart.$selectedHim;
+            if (!point || !chart.scales || !chart.scales.x) return;
+            const x = chart.scales.x.getPixelForValue(point.x);
+            const area = chart.chartArea;
+            const c = chart.ctx;
+            c.save();
+            c.beginPath();
+            c.setLineDash([4, 4]);
+            c.moveTo(x, area.top);
+            c.lineTo(x, area.bottom);
+            c.lineWidth = 1;
+            c.strokeStyle = "rgba(149,134,183,.42)";
+            c.stroke();
+            c.restore();
+          },
+          afterDatasetsDraw(chart) {
+            const point = chart.$selectedHim;
+            if (!point || !chart.scales || !chart.scales.x) return;
+            const x = chart.scales.x.getPixelForValue(point.x);
+            const y = chart.scales.y.getPixelForValue(point.hr);
+            const c = chart.ctx;
+            c.save();
+            c.beginPath();
+            c.arc(x, y, 3.5, 0, Math.PI * 2);
+            c.fillStyle = "#A98A4E";
+            c.fill();
+            c.restore();
+          },
+        };
+        
+        // 两条线均设为实线、平滑、不断点
+        const datasets = [{
+          label: "我 · 实测",
+          data: realPts,
+          borderColor: "#D9A1B0",
+          backgroundColor: meFill,
+          borderWidth: 2.2,
+          tension: 0.4, // 平滑曲线
+          cubicInterpolationMode: "monotone", // 防止穿模
+          borderJoinStyle: "round",
+          borderCapStyle: "round",
+          borderDash: [], // 强制实线
+          spanGaps: true, // 不断线
+          fill: "origin",
+          pointRadius: (c) => (c.dataIndex === c.dataset.data.length - 1 ? 4.6 : 2.6),
+          pointHoverRadius: 5.4,
+          pointStyle: "circle",
+          pointBackgroundColor: "#D9A1B0",
+          pointBorderColor: "#FFFEFC",
+          pointBorderWidth: 1.6,
+          order: 2,
+        }, {
+          label: "沈星回",
+          data: himAll,
+          borderColor: "#C9A45F",
+          backgroundColor: "#C9A45F",
+          borderWidth: 2.2,
+          tension: 0.4,
+          cubicInterpolationMode: "monotone",
+          borderJoinStyle: "round",
+          borderCapStyle: "round",
+          borderDash: [], // 强制实线
+          spanGaps: true, // 不断线
+          fill: false,
+          pointRadius: (c) => (c.dataIndex === selectedHimIndex ? 6.4 : c.dataIndex === c.dataset.data.length - 1 ? 5 : 2.8),
+          pointHoverRadius: 5.8,
+          pointStyle: "circle",
+          pointBackgroundColor: "#C9A45F",
+          pointBorderColor: "#FFFEFC",
+          pointBorderWidth: 1.8,
+          order: 1,
+        }];
+
+        if (selectedHimIndex >= himAll.length) {
+          hideMomentCard();
+        } else if (selectedHimIndex >= 0) {
+          renderMomentCard(himAll[selectedHimIndex]);
+        }
+
+        const yVals = realPts.concat(himAll).map(p => p.y).filter(Number.isFinite);
+        const yMax = Math.max(120, Math.ceil((Math.max(...yVals) + 4) / 10) * 10);
+        
+        hrChart = new Chart(ctx, {
+          type: "line",
+          data: { datasets },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            // 悬浮交互：不要求正对点，同 X 轴一起显示
+            interaction: { mode: "index", intersect: false },
+            onClick: (evt, elements, chart) => {
+              const hit = (elements || []).find(el => el.datasetIndex === 1);
+              const ds = hit ? chart.data.datasets[1] : null;
+              if (hit && hit.datasetIndex === 1 && ds && ds.data[hit.index]) {
+                if (selectedHimIndex === hit.index) {
+                  selectedHimIndex = -1;
+                  chart.$selectedHim = null;
+                  hideMomentCard();
+                  clearChartTooltip(chart);
+                  chart.update("none");
+                  return;
+                }
+                selectedHimIndex = hit.index;
+                const srcPoint = himAll[hit.index] || ds.data[hit.index];
+                chart.$selectedHim = srcPoint;
+                renderMomentCard(srcPoint);
+                const card = document.getElementById("hrMomentCard");
+                if (card) {
+                  const rect = card.getBoundingClientRect();
+                  if (rect.bottom > window.innerHeight) {
+                    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  }
+                }
+                clearChartTooltip(chart);
+                chart.update("none");
+              } else {
+                selectedHimIndex = -1;
+                chart.$selectedHim = null;
+                hideMomentCard();
+                clearChartTooltip(chart);
+                chart.update("none");
+              }
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                enabled: false,
+                backgroundColor: "rgba(81,75,84,.94)",
+                titleColor: "#FFFEFC",
+                bodyColor: "#F4EEF2",
+                padding: 10,
+                cornerRadius: 10,
+                displayColors: false,
+                titleFont: { size: 11 },
+                bodyFont: { size: 12 },
+                filter: (item) => item.parsed && item.parsed.y != null,
+                itemSort: (a, b) => b.datasetIndex - a.datasetIndex, // 沈星回在上
+                callbacks: {
+                  title: (items) => {
+                    if (!items.length) return "";
+                    // 以距离光标最近的 X 轴刻度对应的时间为基准
+                    return minToHm(items[0].parsed.x);
+                  },
+                  label: (c) => {
+                    if (!c.parsed || c.parsed.y == null) return "";
+                    const name = c.dataset.label.includes("沈星回") ? "沈星回" : "小狗";
+                    return `${name}  ${Math.round(c.parsed.y)} bpm`;
+                  },
+                  afterBody: (items) => {
+                    const hit = (items || [])
+                      .map(i => (i && i.raw) || {})
+                      .find(r => r.reason) || {};
+                    const reason = String(hit.reason || "");
+                    if (!reason) return "";
+                    const short = reason.length > 54 ? reason.slice(0, 54) + "…" : reason;
+                    return " " + short;
+                  }
+                },
+              },
+            },
+            scales: {
+              x: {
+                type: "linear", min: 0, max: 1440,
+                grid: { display: false },
+                border: { display: false },
+                ticks: {
+                  color: "#A29AA0", font: { size: 9.5 },
+                  maxRotation: 0, autoSkip: true, maxTicksLimit: 6,
+                  stepSize: 360,
+                  callback: (v) => (Number(v) >= 1440 ? "24:00" : minToHm(v)),
+                },
+              },
+              y: {
+                min: 40, max: yMax,
+                grid: { color: "#F1ECE9", drawTicks: false },
+                border: { display: false },
+                ticks: {
+                  color: "#938A98", font: { size: 9.5 },
+                  stepSize: 20, padding: 6,
+                  callback: (v) => `${v}`,
+                },
+              },
+            },
+          },
+          plugins: [hrGlow, hrCrosshair],
+        });
+
+        if (selectedHimIndex >= 0 && himAll[selectedHimIndex]) {
+          hrChart.$selectedHim = himAll[selectedHimIndex];
+          hrChart.update("none");
+        }
+
+        // 手指抬起/移出时收起系统浮窗，已选竖线保留到下次点选
+        const hrCanvas = document.getElementById("hrChart");
+        if (hrCanvas && !hrCanvas.dataset.hideTipBound) {
+          hrCanvas.dataset.hideTipBound = "1";
+          const hideTip = () => {
+            if (!hrChart || !hrChart.tooltip) return;
+            hrChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+            hrChart.tooltip.setVisibility?.(false);
+            hrChart.update("none");
+          };
+          hrCanvas.addEventListener("touchend", hideTip, { passive: true });
+          hrCanvas.addEventListener("touchcancel", hideTip, { passive: true });
+          hrCanvas.addEventListener("mouseleave", hideTip);
+        }
+
+        if (skeleton) skeleton.style.display = "none";
+      } catch (e) {
+        console.error("加载心率走势失败", e);
+        if (skeleton) skeleton.style.display = "none";
+        if (!hrChart) {
+          if (empty) { empty.textContent = "加载失败，请刷新"; empty.style.display = "flex"; }
+        }
+      }
+    }
+
+    function hideMomentCard() {
+      selectedHimIndex = -1;
+      const card = document.getElementById("hrMomentCard");
+      if (card) card.classList.remove("show");
+      if (typeof hrChart !== "undefined" && hrChart) {
+        hrChart.$selectedHim = null;
+        hrChart.update("none");
+      }
+    }
+
+    function clearChartTooltip(chart) {
+      if (!chart) return;
+      chart.setActiveElements([]);
+      if (chart.tooltip) chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+      chart.update("none");
+    }
+
+    function renderMomentCard(point) {
+      const card = document.getElementById("hrMomentCard");
+      if (!card || !point) return;
+      const timeEl = document.getElementById("hrMomentTime");
+      const hrEl = document.getElementById("hrMomentHr");
+      const tagsEl = document.getElementById("hrMomentTags");
+      const reasonEl = document.getElementById("hrMomentReason");
+      if (timeEl) timeEl.textContent = point.time || "--:--";
+      const rawHr = Number(point.hr);
+      const rawY = Number(point.y);
+      const shownHr = Number.isFinite(rawHr) && rawHr > 0
+        ? rawHr
+        : (Number.isFinite(rawY) && rawY > 0 ? rawY : 0);
+      if (hrEl) hrEl.textContent = Math.round(shownHr);
+      if (tagsEl) {
+        tagsEl.textContent = "";
+        const emotion = String(point.emotion || "").trim();
+        const intensity = Number(point.emotionIntensity) || 0;
+        if (emotion) {
+          const tag = document.createElement("span");
+          tag.className = "hr-moment-tag";
+          tag.textContent = intensity > 0 ? `${emotion} · 强度 ${intensity}` : emotion;
+          tagsEl.appendChild(tag);
+        }
+      }
+      if (reasonEl) {
+        const reason = String(point.reason || "").trim();
+        reasonEl.classList.remove("open");
+        reasonEl.classList.toggle("empty", !reason);
+        reasonEl.textContent = reason || "这一刻没有留下原因";
+      }
+      card.classList.add("show");
+    }
+
+    (function bindMomentCard() {
+      const close = document.getElementById("hrMomentClose");
+      if (close) close.addEventListener("click", () => {
+        hideMomentCard();
+        clearChartTooltip(hrChart);
+      });
+      const reason = document.getElementById("hrMomentReason");
+      if (reason) reason.addEventListener("click", () => reason.classList.toggle("open"));
+    })();
+
+    async function refreshHrPage() {
+      const btn = document.getElementById("hrRefreshBtn");
+      if (!btn || hrManualRefreshing) return;
+
+      hrManualRefreshing = true;
+      btn.disabled = true;
+      btn.classList.add("is-loading");
+      btn.setAttribute("aria-busy", "true");
+      const startedAt = Date.now();
+
+      try {
+        await loadHrChart({ silent: true });
+      } catch (e) {
+        console.error("手动刷新心率失败", e);
+      } finally {
+        // 至少展示一小段旋转反馈，避免网络过快时看起来没反应
+        const remain = Math.max(0, 500 - (Date.now() - startedAt));
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.classList.remove("is-loading");
+          btn.removeAttribute("aria-busy");
+          hrManualRefreshing = false;
+        }, remain);
+      }
+    }
+
+    function startHrAutoRefresh() {
+      stopHrAutoRefresh();
+      hrRefreshTimer = setInterval(() => {
+        if (currentView !== "hr" || document.hidden) return;
+        loadHrChart({ silent: true });
+      }, 60000);
+    }
+    function stopHrAutoRefresh() {
+      if (hrRefreshTimer) { clearInterval(hrRefreshTimer); hrRefreshTimer = null; }
+    }
+
+    // ========== 日历与奶茶 ==========
+    let viewYear, viewMonth, calDays = {}, calStatus = {}, selectedDate = null;
     function initCalendarMonth() {
       const now = new Date();
       viewYear = now.getFullYear();
       viewMonth = now.getMonth() + 1;
     }
-
     async function loadCalendar() {
       if (!viewYear) initCalendarMonth();
       const label = document.getElementById("monthLabel");
       label.textContent = `${viewYear}年${viewMonth}月`;
-
-      // 计算预测区间
       const monthStr = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
       try {
         const resp = await fetch(`/health/api/period/month?month=${monthStr}&t=${Date.now()}`);
@@ -696,29 +1271,19 @@
           calDays = res.days || {};
           calStatus = res.period_status || {};
         } else {
-          calDays = {};
-          calStatus = {};
+          calDays = {}; calStatus = {};
         }
-      } catch (e) {
-        console.error("加载日历失败", e);
-        calDays = {};
-        calStatus = {};
-      }
+      } catch (e) { calDays = {}; calStatus = {}; }
       renderCalendar();
       renderStatusCard();
     }
-
     function renderCalendar() {
       document.getElementById("monthLabel").textContent = `${viewYear}年${viewMonth}月`;
-
       const grid = document.getElementById("calGrid");
       grid.innerHTML = "";
-
       const first = new Date(viewYear, viewMonth - 1, 1);
       const firstDay = first.getDay();
       const daysInMonth = new Date(viewYear, viewMonth, 0).getDate();
-
-      // 预测日期集合
       const predSet = new Set();
       const nextStart = calStatus.next_start_date;
       const avgLen = parseInt(calStatus.avg_length) || 5;
@@ -729,80 +1294,69 @@
           predSet.add(d.toISOString().slice(0, 10));
         }
       }
-
       const todayStr = new Date().toISOString().slice(0, 10);
-
       for (let i = 0; i < firstDay; i++) {
         const cell = document.createElement("div");
         cell.className = "cal-cell empty";
         grid.appendChild(cell);
       }
-
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${viewYear}-${String(viewMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         const cell = document.createElement("div");
         cell.className = "cal-cell";
         cell.textContent = d;
-
         if (dateStr === todayStr) cell.classList.add("today");
-
-        // 已标记 = 明确 true
-        if (calDays[dateStr] === true) {
-          cell.classList.add("marked");
-        } else if (predSet.has(dateStr)) {
-          cell.classList.add("pred");
-        }
-
+        if (calDays[dateStr] === true) cell.classList.add("marked");
+        else if (predSet.has(dateStr)) cell.classList.add("pred");
         if (cell.classList.contains("marked") || cell.classList.contains("pred")) {
           const dot = document.createElement("div");
           dot.className = "dot";
           cell.appendChild(dot);
         }
-
         cell.onclick = () => openModal(dateStr);
         grid.appendChild(cell);
       }
     }
-
-    function prevMonth() {
-      viewMonth--;
-      if (viewMonth < 1) { viewMonth = 12; viewYear--; }
-      loadCalendar();
+    function prevMonth() { viewMonth--; if (viewMonth < 1) { viewMonth = 12; viewYear--; } loadCalendar(); }
+    function nextMonth() { viewMonth++; if (viewMonth > 12) { viewMonth = 1; viewYear++; } loadCalendar(); }
+    function goToday() { initCalendarMonth(); loadCalendar(); }
+    function openModal(dateStr) {
+      selectedDate = dateStr;
+      document.getElementById("modalDate").textContent = dateStr;
+      const isMarked = calDays[dateStr] === true;
+      document.getElementById("modalTitle").textContent = isMarked ? "已标记为经期" : "标记经期";
+      document.getElementById("btnMark").style.display = isMarked ? "none" : "block";
+      document.getElementById("btnUnmark").style.display = isMarked ? "block" : "none";
+      document.getElementById("modalMask").classList.add("show");
     }
-    function nextMonth() {
-      viewMonth++;
-      if (viewMonth > 12) { viewMonth = 1; viewYear++; }
-      loadCalendar();
+    function closeModal() { document.getElementById("modalMask").classList.remove("show"); selectedDate = null; }
+    async function doMark() {
+      if (!selectedDate) return;
+      try {
+        await fetch("/health/api/period/mark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: selectedDate, flow: "中等" }) });
+        closeModal(); await loadCalendar();
+      } catch (e) { alert("标记失败"); }
     }
-    function goToday() {
-      initCalendarMonth();
-      loadCalendar();
+    async function doUnmark() {
+      if (!selectedDate) return;
+      try {
+        await fetch("/health/api/period/unmark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: selectedDate }) });
+        closeModal(); await loadCalendar();
+      } catch (e) { alert("取消标记失败"); }
     }
-
-    // ========== 弹窗 ==========
-    // ========== 奶茶日历 ==========
-    let mtYear = new Date().getFullYear();
-    let mtMonth = new Date().getMonth() + 1;
-    let mtDays = {};
-    let mtSelected = "";
-
-    // 后端只回错误码，这里翻成人话
-    const MT_ERR = {
-      "bad date": "日期不对",
-      "future date": "这天还没到，不能提前记账",
-      "rejected": "品牌和饮品名至少填一个",
-      "not found": "没找到这条",
-      "bad json": "内容格式不对"
-    };
-    function mtErr(res) {
-      return (res && MT_ERR[res.error]) || "没成功，稍后再试";
-    }
-
-    function mtToday() {
-      const t = new Date();
-      return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    function renderStatusCard() {
+      const s = calStatus || {};
+      document.getElementById("statusTitle").textContent = s.in_period ? `经期第 ${s.period_day} 天` : "不在经期";
+      document.getElementById("statusLast").textContent = s.last_start || "--";
+      document.getElementById("statusNext").textContent = fmtMonthDay(s.next_start_date) || "--";
+      document.getElementById("statusCycle").textContent = (s.avg_cycle || "--") + " 天";
+      document.getElementById("statusLen").textContent = (s.avg_length || "--") + " 天";
     }
 
+    let mtYear = new Date().getFullYear(), mtMonth = new Date().getMonth() + 1, mtDays = {}, mtSelected = "";
+    const MT_ERR = { "bad date": "日期不对", "future date": "不能提前记账", "rejected": "品牌和饮品名至少填一个", "not found": "没找到", "bad json": "格式不对" };
+    function mtErr(res) { return (res && MT_ERR[res.error]) || "没成功，稍后再试"; }
+    function mtToday() { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; }
     async function loadMtMonth() {
       document.getElementById("mtMonthLabel").textContent = `${mtYear}年${mtMonth}月`;
       const ym = `${mtYear}-${String(mtMonth).padStart(2, "0")}`;
@@ -813,59 +1367,34 @@
         mtDays = (res && res.ok && res.days) ? res.days : {};
         renderMtCalendar();
         const total = Object.values(mtDays).reduce((a, b) => a + b, 0);
-        summary.textContent = total
-          ? `本月 ${total} 杯 · 最常喝：${res.favorite || "—"}`
-          : "本月还没有记录";
-      } catch (e) {
-        console.error("加载奶茶数据失败", e);
-        mtDays = {};
-        renderMtCalendar();
-        summary.textContent = "加载失败，稍后再看";
-      }
+        summary.textContent = total ? `本月 ${total} 杯 · 最常喝：${res.favorite || "—"}` : "本月还没有记录";
+      } catch (e) { mtDays = {}; renderMtCalendar(); summary.textContent = "加载失败"; }
     }
-
     function renderMtCalendar() {
       const grid = document.getElementById("mtGrid");
       grid.innerHTML = "";
       const firstDay = new Date(mtYear, mtMonth - 1, 1).getDay();
       const daysInMonth = new Date(mtYear, mtMonth, 0).getDate();
       const todayStr = mtToday();
-
-      for (let i = 0; i < firstDay; i++) {
-        grid.appendChild(Object.assign(document.createElement("div"), { className: "cal-cell" }));
-      }
+      for (let i = 0; i < firstDay; i++) grid.appendChild(Object.assign(document.createElement("div"), { className: "cal-cell" }));
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${mtYear}-${String(mtMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         const cell = document.createElement("div");
         cell.className = "cal-cell";
         if (dateStr === todayStr) cell.classList.add("today");
         cell.style.cursor = "pointer";
-        const num = document.createElement("span");
-        num.textContent = d;
-        cell.appendChild(num);
+        cell.appendChild(Object.assign(document.createElement("span"), { textContent: d }));
         const n = mtDays[dateStr] || 0;
         if (n > 0) {
           cell.classList.add("mt-hit");
-          const badge = document.createElement("div");
-          badge.className = "mt-count";
-          badge.textContent = n > 1 ? `${n}杯` : "🧋";
-          cell.appendChild(badge);
+          cell.appendChild(Object.assign(document.createElement("div"), { className: "mt-count", textContent: n > 1 ? `${n}杯` : "🧋" }));
         }
         cell.onclick = () => openMtDay(dateStr);
         grid.appendChild(cell);
       }
     }
-
-    function mtPrevMonth() {
-      mtMonth--; if (mtMonth < 1) { mtMonth = 12; mtYear--; }
-      loadMtMonth();
-    }
-
-    function mtNextMonth() {
-      mtMonth++; if (mtMonth > 12) { mtMonth = 1; mtYear++; }
-      loadMtMonth();
-    }
-
+    function mtPrevMonth() { mtMonth--; if (mtMonth < 1) { mtMonth = 12; mtYear--; } loadMtMonth(); }
+    function mtNextMonth() { mtMonth++; if (mtMonth > 12) { mtMonth = 1; mtYear++; } loadMtMonth(); }
     async function openMtDay(dateStr) {
       mtSelected = dateStr;
       document.getElementById("mtDateStr").textContent = dateStr;
@@ -873,7 +1402,6 @@
       document.getElementById("mtMask").classList.add("show");
       await mtRenderList();
     }
-
     async function mtRenderList() {
       const box = document.getElementById("mtList");
       box.innerHTML = "<div class='mt-empty'>加载中…</div>";
@@ -882,21 +1410,13 @@
         const res = await resp.json();
         const items = (res && res.ok && Array.isArray(res.items)) ? res.items : [];
         box.innerHTML = "";
-        if (!items.length) {
-          box.innerHTML = "<div class='mt-empty'>这天没有记录</div>";
-          return;
-        }
+        if (!items.length) { box.innerHTML = "<div class='mt-empty'>这天没有记录</div>"; return; }
         items.forEach(it => box.appendChild(mtRenderItem(it)));
-      } catch (e) {
-        console.error("加载当天奶茶失败", e);
-        box.innerHTML = "<div class='mt-empty'>加载失败</div>";
-      }
+      } catch (e) { box.innerHTML = "<div class='mt-empty'>加载失败</div>"; }
     }
-
     function mtRenderItem(it) {
       const wrap = document.createElement("div");
       wrap.className = "mt-item";
-
       const head = document.createElement("div");
       head.className = "mt-head";
       head.textContent = [it.brand, it.name].filter(Boolean).join(" · ") || "（未命名）";
@@ -906,142 +1426,37 @@
       del.onclick = () => mtDelete(it.id);
       head.appendChild(del);
       wrap.appendChild(head);
-
-      // 没填评分 -> 这一行不出现星星（不显示空星，也不显示 0 分）
-      const meta = [
-        it.sugar_text,
-        it.ice,
-        (Array.isArray(it.toppings) && it.toppings.length) ? "加" + it.toppings.join("、") : "",
-        it.rating ? "★".repeat(it.rating) : ""
-      ].filter(Boolean).join(" · ");
-      if (meta) {
-        const m = document.createElement("div");
-        m.className = "mt-meta";
-        m.textContent = meta;
-        wrap.appendChild(m);
-      }
-      if (it.note) {
-        const nt = document.createElement("div");
-        nt.className = "mt-note";
-        nt.textContent = `「${it.note}」`;
-        wrap.appendChild(nt);
-      }
+      const meta = [it.sugar_text, it.ice, (Array.isArray(it.toppings) && it.toppings.length) ? "加" + it.toppings.join("、") : "", it.rating ? "★".repeat(it.rating) : ""].filter(Boolean).join(" · ");
+      if (meta) wrap.appendChild(Object.assign(document.createElement("div"), { className: "mt-meta", textContent: meta }));
+      if (it.note) wrap.appendChild(Object.assign(document.createElement("div"), { className: "mt-note", textContent: `「${it.note}」` }));
       return wrap;
     }
-
-    function mtToggleForm() {
-      document.getElementById("mtForm").classList.toggle("show");
-    }
-
+    function mtToggleForm() { document.getElementById("mtForm").classList.toggle("show"); }
     async function mtSubmit() {
       const val = id => document.getElementById(id).value.trim();
       const brand = val("mtBrand"), name = val("mtName");
       if (!brand && !name) { alert("品牌和饮品名至少填一个"); return; }
-      if (mtSelected > mtToday()) { alert("这天还没到，不能提前记账"); return; }
-      const body = {
-        date: mtSelected, brand, name,
-        sugar_text: val("mtSugar"), ice: val("mtIce"),
-        toppings: val("mtToppings"),
-        rating: val("mtRating") || null,
-        note: val("mtNote")
-      };
+      if (mtSelected > mtToday()) { alert("这天还没到"); return; }
       try {
-        const resp = await fetch("/health/api/milktea/add", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-        });
+        const resp = await fetch("/health/api/milktea/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: mtSelected, brand, name, sugar_text: val("mtSugar"), ice: val("mtIce"), toppings: val("mtToppings"), rating: val("mtRating") || null, note: val("mtNote") }) });
         const res = await resp.json();
         if (!res.ok) { alert(mtErr(res)); return; }
-        ["mtBrand", "mtName", "mtSugar", "mtIce", "mtToppings", "mtNote"].forEach(i => {
-          document.getElementById(i).value = "";
-        });
+        ["mtBrand", "mtName", "mtSugar", "mtIce", "mtToppings", "mtNote"].forEach(i => document.getElementById(i).value = "");
         document.getElementById("mtRating").value = "";
         document.getElementById("mtForm").classList.remove("show");
-        await mtRenderList();
-        await loadMtMonth();
-      } catch (e) {
-        console.error("补记失败", e);
-        alert("补记失败，没连上服务");
-      }
+        await mtRenderList(); await loadMtMonth();
+      } catch (e) { alert("补记失败"); }
     }
-
     async function mtDelete(id) {
       if (!confirm("删掉这一条？")) return;
       try {
-        const resp = await fetch("/health/api/milktea/delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date: mtSelected, id })
-        });
+        const resp = await fetch("/health/api/milktea/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: mtSelected, id }) });
         const res = await resp.json();
         if (!res.ok) { alert(mtErr(res)); return; }
-        await mtRenderList();
-        await loadMtMonth();
-      } catch (e) {
-        console.error("删除失败", e);
-        alert("删除失败");
-      }
+        await mtRenderList(); await loadMtMonth();
+      } catch (e) { alert("删除失败"); }
     }
-
-    function closeMtModal() {
-      document.getElementById("mtMask").classList.remove("show");
-    }
-
-    function openModal(dateStr) {
-      selectedDate = dateStr;
-      document.getElementById("modalDate").textContent = dateStr;
-      const isMarked = calDays[dateStr] === true;
-      document.getElementById("modalTitle").textContent = isMarked ? "已标记为经期" : "标记经期";
-      document.getElementById("btnMark").style.display = isMarked ? "none" : "block";
-      document.getElementById("btnUnmark").style.display = isMarked ? "block" : "none";
-      document.getElementById("modalMask").classList.add("show");
-    }
-    function closeModal() {
-      document.getElementById("modalMask").classList.remove("show");
-      selectedDate = null;
-    }
-    async function doMark() {
-      if (!selectedDate) return;
-      try {
-        await fetch("/health/api/period/mark", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date: selectedDate, flow: "中等" }),
-        });
-        closeModal();
-        await loadCalendar();
-      } catch (e) {
-        console.error("标记失败", e);
-        alert("标记失败，请稍后重试");
-      }
-    }
-    async function doUnmark() {
-      if (!selectedDate) return;
-      try {
-        await fetch("/health/api/period/unmark", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date: selectedDate }),
-        });
-        closeModal();
-        await loadCalendar();
-      } catch (e) {
-        console.error("取消标记失败", e);
-        alert("取消标记失败，请稍后重试");
-      }
-    }
-
-    // ========== 状态小卡 ==========
-    function renderStatusCard() {
-      const s = calStatus || {};
-      document.getElementById("statusTitle").textContent =
-        s.in_period ? `经期第 ${s.period_day} 天` : "不在经期";
-      document.getElementById("statusLast").textContent = s.last_start || "--";
-      document.getElementById("statusNext").textContent = fmtMonthDay(s.next_start_date) || "--";
-      document.getElementById("statusCycle").textContent = (s.avg_cycle || "--") + " 天";
-      document.getElementById("statusLen").textContent = (s.avg_length || "--") + " 天";
-    }
+    function closeMtModal() { document.getElementById("mtMask").classList.remove("show"); }
 
     // ========== 启动 ==========
     fetchData();
