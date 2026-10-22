@@ -101,7 +101,7 @@ Apple Watch / iPhone (健康数据)
 | `group_cooldown_hours_forecast` | 「经期预测」簇冷却（小时）：临近经期倒计时提醒。 | `168` |
 | `late_night_start_time` / `late_night_end_time` | 深夜实时监测窗口（24 小时制 `HH:MM`）。结束时间早于开始时间即按跨天处理（如 23:00→05:00）。 | `01:00` / `05:00` |
 | `late_night_hr_ratio` | 深夜实时判定倍数：当前心率需高于静息的多少倍才算「人还醒着」。 | `1.15` |
-| `fallback_care` | 主动关怀注入失败时的兜底文案；留空则注入失败静默跳过。 | `宝宝 今天感觉怎么样？` |
+| `fallback_care` | 主动关怀注入失败时的兜底文案；留空则注入失败静默跳过。 | `今天感觉怎么样？` |
 | `rule_period_started` | 经期开始关怀：检测到「今天是经期第 1 天」时关怀一次。 | `true` |
 | `rule_period_soon` | 经期临近提醒：距预测经期剩 `period_soon_days` 天时提醒一次（需至少 2 次经期记录）。 | `true` |
 | `period_soon_days` | 经期提前提醒天数。 | `2` |

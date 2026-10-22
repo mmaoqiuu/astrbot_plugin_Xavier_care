@@ -21,7 +21,7 @@
     "description": "主动关怀发送目标",
     "type": "string",
     "default": "",
-    "hint": "留空＝发到最近说过话的会话。填了＝主动关怀固定发到这个会话（填 unified_msg_origin，例如 default:private:123456789）。"
+    "hint": "留空＝发到最近说过话的会话。填了＝主动关怀固定发到这个会话（填 unified_msg_origin，例如 default:private:你的会话ID）。"
   },
   "monitor_enabled": {
     "description": "主动关怀总开关",
@@ -260,7 +260,7 @@
   "fallback_care": {
     "description": "兜底关怀文案",
     "type": "string",
-    "default": "宝宝 今天感觉怎么样？",
+    "default": "今天感觉怎么样？",
     "hint": "主动关怀注入失败时，用这句直接发给对方。留空则注入失败就静默跳过。"
   },
   "care_log_enabled": {
