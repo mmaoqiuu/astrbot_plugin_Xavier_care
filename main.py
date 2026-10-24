@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import time
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from . import chat_care, health_logic, milktea, mirror_life, mirror_logic
 from .care_guard import CareGuard
+from .config_compat import migrate_and_wrap
 from .mirror_store import MirrorStore
 from .monitor import HealthMonitor
 
@@ -49,6 +51,9 @@ PLUGIN_DIR_NAME = "astrbot_plugin_Xavier_care"
 
 # 插件更名前使用的目录名，仅用于历史数据的一次性迁移。
 LEGACY_DIR_NAME = "astrbot_plugin_health_bridge"
+
+# 默认只在下面这个会话里工作（面板「固定目标会话」可改）。
+DEFAULT_TARGET_UMO = "sxh:FriendMessage:3800806724"
 
 # 接收端点路径。固定值；真正的门锁是 auth_token，不是这个路径。
 ENDPOINT_PATH = "/health/report"
@@ -64,17 +69,19 @@ MAX_BODY_BYTES = 64 * 1024
 INJECT_SENDER_NAME = "event_bridge"
 
 
-@register(PLUGIN_DIR_NAME, "pupotato", "接收手机推送的健康数据并存储，提供一个工具供角色读取最近的身体状态。", "2.0.0")
+@register(PLUGIN_DIR_NAME, "pupotato", "接收手机推送的健康数据并存储，提供一个工具供角色读取最近的身体状态。", "2.2.0")
 class HealthBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.config = config
+        self.config = migrate_and_wrap(config)
         # data/plugin_data/astrbot_plugin_Xavier_care/<date>.json
         self._data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_DIR_NAME
         # aiohttp 监听相关对象，启动后赋值，便于 terminate 时干净关闭。
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
+        self._listen_port: int = 0
+        self._listen_error: str = ""
         self._last_event: AstrMessageEvent | None = None
         self._pending_mirror_record: dict | None = None
         self._mirror_data_task: asyncio.Task | None = None
@@ -99,7 +106,7 @@ class HealthBridge(Star):
         self._mirror_last_error = ""
         # 运行时开关（/health on|off 会即时改它，不依赖 config 写回）
         self._monitor_runtime_enabled: bool = bool(
-            self.config.get("monitor_enabled", False)
+            self.config.get("monitor_enabled", True)
         )
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -113,13 +120,13 @@ class HealthBridge(Star):
         # 既不缓存，也不计入对话活跃，否则会把闸门自己锁死。
         if self._is_injected_event(event):
             return
+        # 主动关怀只认私聊：群聊消息既不更新推送目标，也不参与对话互斥。
+        if not event.is_private_chat():
+            return
         self._last_event = event
         self.guard.record_user_message()
         # 身体镜像：任何一句真人对话都算「有对话」，用于判断是否满 2 小时没说话
-        if (
-            bool(self.config.get("mirror_enabled", True))
-            and event.is_private_chat()
-        ):
+        if bool(self.config.get("mirror_enabled", True)):
             await self._mirror_touch_chat(event)
 
     @filter.on_decorating_result(priority=1)
@@ -138,7 +145,8 @@ class HealthBridge(Star):
         except Exception:
             logger.exception("[Xavier_care] 兜底清理身体镜像标签失败（不影响发送）")
         try:
-            self.guard.record_bot_reply()
+            if event.is_private_chat():
+                self.guard.record_bot_reply()
         except Exception:
             logger.exception("[Xavier_care] 记录机器人发送时间失败")
 
@@ -178,12 +186,11 @@ class HealthBridge(Star):
             logger.exception("[Xavier_care] 解析对话心率失败（不影响回复）")
 
     def _mirror_resolve_umo(self, event: AstrMessageEvent) -> str:
+        """只在固定会话里工作；别的会话一律返回空，整条链路不落盘。"""
         target = str(self.config.get("mirror_target_umo") or "").strip()
-        current = event.unified_msg_origin
-        if target:
-            # 配了固定会话就只跟那一个，避免别的私聊也生成一份。
-            return target if current == target else ""
-        return current
+        if not target:
+            target = DEFAULT_TARGET_UMO
+        return target if event.unified_msg_origin == target else ""
 
     async def _mirror_touch_chat(self, event: AstrMessageEvent) -> None:
         """记下最近一次真人对话时间，供静息补点判断「多久没说话」。"""
@@ -390,12 +397,9 @@ class HealthBridge(Star):
                 logger.warning("[Xavier_care] 数据共振私语发送失败")
 
     def _mirror_default_umo(self) -> str:
+        """主动推送的目标：固定会话优先，没配就用默认 QQ 会话。"""
         target = str(self.config.get("mirror_target_umo") or "").strip()
-        if target:
-            return target
-        if self._last_event:
-            return self._last_event.unified_msg_origin
-        return ""
+        return target or DEFAULT_TARGET_UMO
 
     async def _mirror_persona(self, umo: str) -> str:
         try:
@@ -471,7 +475,7 @@ class HealthBridge(Star):
             except Exception:
                 logger.exception("[Xavier_care] 打开页面时补静息点失败")
 
-        target = str(self.config.get("mirror_target_umo") or "").strip()
+        target = self._mirror_default_umo()
         if target:
             state = self.mirror_store.load(target, date_str)
         else:
@@ -499,6 +503,11 @@ class HealthBridge(Star):
         - 提示词里明确写了「可以完全不提」，是否开口交给角色自己判断。
         """
         if not await self._is_session_enabled(event):
+            return
+        if not event.is_private_chat():
+            return
+        if not self._mirror_resolve_umo(event):
+            # 只在固定会话里关心，别的会话一句话都不插。
             return
         if self._is_injected_event(event):
             # 主动推送自己注入的伪消息：那条提示词里已经带好关怀内容，
@@ -630,6 +639,40 @@ class HealthBridge(Star):
         except Exception:
             return False
 
+    @staticmethod
+    def _is_private_umo(umo: str) -> bool:
+        """判断 unified_msg_origin 是不是私聊。
+
+        群聊的 message_type 里一定带 group；私聊常见 private / FriendMessage。
+        判断不出来时按「非私聊」处理，宁可少推一条，也不把健康关怀发进群里。
+        """
+        try:
+            parts = str(umo or "").split(":")
+            if len(parts) < 2:
+                return False
+            msg_type = parts[1].strip().lower()
+            if "group" in msg_type:
+                return False
+            return any(k in msg_type for k in ("private", "friend", "dm", "user"))
+        except Exception:
+            return False
+
+    def _resolve_push_umo(self) -> str:
+        """主动关怀的私聊目标。配置了非私聊目标也不会发。"""
+        configured = str(self.config.get("push_target_umo") or "").strip()
+        if configured:
+            if self._is_private_umo(configured):
+                return configured
+            logger.warning(
+                "[Xavier_care] push_target_umo 不是私聊会话，已忽略；"
+                "主动关怀只会发到私聊"
+            )
+        # 没单独配推送目标就跟着镜像走，避免关怀漏到别的会话。
+        mirror_target = self._mirror_default_umo()
+        if mirror_target and self._is_private_umo(mirror_target):
+            return mirror_target
+        return ""
+
     def _migrate_legacy_data_dir(self) -> None:
         """插件更名后的一次性迁移：把旧目录里的数据复制过来（只复制，不删除旧目录）。"""
         legacy = Path(get_astrbot_data_path()) / "plugin_data" / LEGACY_DIR_NAME
@@ -716,7 +759,7 @@ class HealthBridge(Star):
             self.config.save_config()
             logger.warning(
                 "[Xavier_care] 未配置 auth_token，已自动生成一串专属密钥并写入配置。"
-                "请在 WebUI 插件配置里查看 auth_token，并把同样的值填进手机上报端。"
+                "在私聊发送 /health setup 即可看到上报地址和密钥。"
             )
         except Exception:
             self.config["auth_token"] = ""
@@ -728,57 +771,84 @@ class HealthBridge(Star):
     # -- 模块一：接收端 ---------------------------------------------------
 
     async def _start_server(self) -> None:
-        """启动 aiohttp 监听。失败只记日志、不抛异常，避免连累其他插件。"""
+        """启动 aiohttp 监听。失败只记日志、不抛异常，避免连累其他插件。
+
+        端口被占用时自动往后试两个（如 8787→8788→8789），
+        并把最终端口记在 self._listen_port，供 /health setup 展示。
+        """
         await self._stop_server()
 
         try:
-            port = int(self.config.get("listen_port", 8787))
+            base_port = int(self.config.get("listen_port", 8787))
         except (TypeError, ValueError):
-            port = 8787
+            base_port = 8787
+        if base_port < 1 or base_port > 65535:
+            base_port = 8787
 
-        runner = None
-        try:
-            app = web.Application(client_max_size=MAX_BODY_BYTES)
-            app.router.add_post(ENDPOINT_PATH, self._handle_report)
-            app.router.add_get("/health/dashboard", self._handle_dashboard)
-            app.router.add_get("/health/api/data", self._handle_api_data)
-            app.router.add_get("/health/api/history", self._handle_api_history)
-            app.router.add_get("/health/api/period/month", self._handle_api_period_month)
-            app.router.add_post("/health/api/period/mark", self._handle_api_period_mark)
-            app.router.add_post("/health/api/period/unmark", self._handle_api_period_unmark)
-            # 静态资源（图标/装饰图），文件放插件目录下的 assets/
-            app.router.add_get("/health/api/milktea/month", self._handle_api_milktea_month)
-            app.router.add_get("/health/api/milktea/day", self._handle_api_milktea_day)
-            app.router.add_post("/health/api/milktea/add", self._handle_api_milktea_add)
-            app.router.add_post("/health/api/milktea/delete", self._handle_api_milktea_delete)
-            app.router.add_get("/health/assets/{name}", self._handle_asset)
-            runner = web.AppRunner(app)
-            await runner.setup()
-            site = web.TCPSite(runner, host="0.0.0.0", port=port)
-            await site.start()
-            self._app, self._runner, self._site = app, runner, site
-            logger.info(
-                f"[Xavier_care] 接收端已启动：监听 0.0.0.0:{port}{ENDPOINT_PATH}（仅 POST）"
-            )
-            if not self.config.get("auth_token"):
-                logger.warning(
-                    "[Xavier_care] auth_token 尚未配置，配置前所有上报都会被拒绝（401）。"
-                    "请在 WebUI 插件配置里填写。"
+        last_error = ""
+        for offset in range(3):
+            port = base_port + offset
+            if port > 65535:
+                break
+            runner = None
+            try:
+                app = web.Application(client_max_size=MAX_BODY_BYTES)
+                app.router.add_post(ENDPOINT_PATH, self._handle_report)
+                app.router.add_get("/health/dashboard", self._handle_dashboard)
+                app.router.add_get("/health/api/data", self._handle_api_data)
+                app.router.add_get("/health/api/history", self._handle_api_history)
+                app.router.add_get("/health/api/period/month", self._handle_api_period_month)
+                app.router.add_post("/health/api/period/mark", self._handle_api_period_mark)
+                app.router.add_post("/health/api/period/unmark", self._handle_api_period_unmark)
+                app.router.add_get("/health/api/milktea/month", self._handle_api_milktea_month)
+                app.router.add_get("/health/api/milktea/day", self._handle_api_milktea_day)
+                app.router.add_post("/health/api/milktea/add", self._handle_api_milktea_add)
+                app.router.add_post("/health/api/milktea/delete", self._handle_api_milktea_delete)
+                app.router.add_get("/health/assets/{name}", self._handle_asset)
+
+                runner = web.AppRunner(app)
+                await runner.setup()
+                site = web.TCPSite(runner, host="0.0.0.0", port=port)
+                await site.start()
+
+                self._app, self._runner, self._site = app, runner, site
+                self._listen_port = port
+                self._listen_error = ""
+                logger.info(
+                    f"[Xavier_care] 接收端已启动：监听 0.0.0.0:{port}{ENDPOINT_PATH}（仅 POST）"
                 )
-        except Exception:
-            logger.exception(
-                f"[Xavier_care] 接收端启动失败（端口 {port} 可能被占用或被防火墙拦）。"
-                "读取工具仍可用，但暂时收不到新数据。"
-            )
-            if runner is not None:
-                try:
-                    await runner.cleanup()
-                except Exception:
-                    logger.exception("[Xavier_care] 回收启动失败的监听器时出错")
+                if port != base_port:
+                    logger.warning(
+                        f"[Xavier_care] 配置端口 {base_port} 被占用，已自动改用 {port}；"
+                        "手机端请用 /health setup 里的新地址"
+                    )
+                if not self.config.get("auth_token"):
+                    logger.warning(
+                        "[Xavier_care] auth_token 尚未配置，配置前所有上报都会被拒绝（401）。"
+                        "请在私聊发送 /health setup 获取密钥。"
+                    )
+                return
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning(
+                    f"[Xavier_care] 端口 {port} 启动失败（可能被占用）：{exc}"
+                )
+                if runner is not None:
+                    try:
+                        await runner.cleanup()
+                    except Exception:
+                        logger.exception("[Xavier_care] 回收启动失败的监听器时出错")
+
+        self._listen_error = last_error or "端口不可用"
+        logger.error(
+            f"[Xavier_care] 接收端启动失败：{base_port} / {base_port + 1} / "
+            f"{base_port + 2} 都不可用。读取工具仍可用，但暂时收不到新数据。"
+        )
 
     async def _stop_server(self) -> None:
         site, runner = self._site, self._runner
         self._site = self._runner = self._app = None
+        self._listen_port = 0
         try:
             if site is not None:
                 await site.stop()
@@ -852,13 +922,11 @@ class HealthBridge(Star):
 
     async def _trigger_event_wakeup(self, prompt: str) -> bool:
         """monitor 主动关怀用：构造一条伪造消息注入 AstrBot 处理流程。"""
-        umo = self.config.get("push_target_umo") or None
+        umo = self._resolve_push_umo() or None
         bot_self_id = None
         cq_bot = None
 
         if self._last_event:
-            if not umo:
-                umo = self._last_event.unified_msg_origin
             bot_self_id = self._last_event.get_self_id()
             if hasattr(self._last_event, "bot"):
                 cq_bot = self._last_event.bot
@@ -919,7 +987,10 @@ class HealthBridge(Star):
                 pass
 
         if not umo:
-            logger.info("[Xavier_care] 尚未记录到最近会话交互，跳过即时唤醒")
+            logger.info("[Xavier_care] 尚未记录到最近私聊交互，跳过即时唤醒")
+            return False
+        if not self._is_private_umo(umo):
+            logger.warning("[Xavier_care] 主动关怀目标不是私聊，已跳过（不会发到群里）")
             return False
 
         try:
@@ -1023,8 +1094,12 @@ class HealthBridge(Star):
         """静默时段判断。支持跨天（如 23 → 7）。"""
         now_h = datetime.now().hour
         try:
-            start = int(self.config.get("quiet_hours_start", 23))
-            end = int(self.config.get("quiet_hours_end", 7))
+            start = int(
+                self.config.get("quiet_hours_start", self.config.get("quiet_start", 23))
+            )
+            end = int(
+                self.config.get("quiet_hours_end", self.config.get("quiet_end", 7))
+            )
         except (TypeError, ValueError):
             return False
         if start == end:
@@ -1039,6 +1114,24 @@ class HealthBridge(Star):
             return
         if self._in_quiet_hours():
             logger.info("[Xavier_care] 处于静默时段，跳过本次检测")
+            return
+
+        # 历史不足 3 天时先不主动推，避免刚开始用就被误报打扰。
+        try:
+            baseline_days = int(self.config.get("baseline_days", 7) or 7)
+            have_days = len(self.monitor._load_recent(baseline_days))
+        except Exception:
+            have_days = 0
+        if have_days < 3:
+            logger.info(
+                f"[Xavier_care] 历史只有 {have_days} 天（不足 3 天），"
+                "暂不主动推送；数据够了会自动开始"
+            )
+            return
+
+        umo = self._resolve_push_umo()
+        if not umo:
+            logger.info("[Xavier_care] 还没有私聊会话，跳过本次主动推送")
             return
 
         alerts = self.monitor.scan()
@@ -1063,10 +1156,6 @@ class HealthBridge(Star):
                 logger.info(f"[Xavier_care] 跳过 {alert_type}：{reason}")
                 continue
 
-            umo = self.config.get("push_target_umo") or (
-                self._last_event.unified_msg_origin if self._last_event else ""
-            )
-
             prompt = (
                 f"【系统健康感知】{a['hint']}\n"
                 f"【要求】请完全代入沈星回的人格特征，主动对她说一两句日常关怀："
@@ -1085,8 +1174,11 @@ class HealthBridge(Star):
 
             via = "inject"
             if not ok:
-                fallback = (self.config.get("fallback_care") or "").strip()
-                if fallback and umo:
+                fallback = self.config.get("fallback_care")
+                if fallback is None:
+                    fallback = "怎么又不舒服了？过来，跟我说说。"
+                fallback = str(fallback).strip()
+                if fallback:
                     sent = await self._send_direct(umo, fallback)
                     via = "fallback"
                     logger.info(
@@ -1112,9 +1204,9 @@ class HealthBridge(Star):
 
     def _run_cleanup(self) -> None:
         try:
-            retention = int(self.config.get("retention_days", 30))
+            retention = int(self.config.get("retention_days", 180))
         except (TypeError, ValueError):
-            retention = 30
+            retention = 180
         try:
             removed = health_logic.cleanup_old(self._data_dir, retention)
             if removed:
@@ -1470,7 +1562,7 @@ class HealthBridge(Star):
 
     @filter.command("health")
     async def cmd_health(self, event: AstrMessageEvent, action: str = ""):
-        """/health [on|off|test|base|log|mark|end|chat] 健康插件总入口。
+        """/health [on|off|test|setup|base|log|mark|end|chat] 健康插件总入口。
 
         不带参数时给出总览：主动关怀状态 + 经期状态。
         """
@@ -1478,7 +1570,8 @@ class HealthBridge(Star):
             if not event.is_private_chat():
                 return
         except Exception:
-            pass
+            # 判断不出会话类型时也不回复，避免把健康信息发进群里。
+            return
 
         act = (action or "").lower().strip()
 
@@ -1497,6 +1590,10 @@ class HealthBridge(Star):
 
             if act == "test":
                 yield event.plain_result(self._render_scan_result())
+                return
+
+            if act in ("setup", "connect", "配置", "连接"):
+                yield event.plain_result(self._render_setup_card())
                 return
 
             if act in ("base", "baseline"):
@@ -1544,6 +1641,52 @@ class HealthBridge(Star):
             yield event.plain_result("操作出错了，详情见服务端日志。")
 
     # -- 各动作的输出 ------------------------------------------------------
+
+    @staticmethod
+    def _local_ip() -> str:
+        """取本机局域网 IP。取不到就回 127.0.0.1。"""
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.connect(("223.5.5.5", 80))
+            return sock.getsockname()[0]
+        except Exception:
+            return "127.0.0.1"
+        finally:
+            try:
+                if sock is not None:
+                    sock.close()
+            except Exception:
+                pass
+
+    def _render_setup_card(self) -> str:
+        """给手机上报端看的一张「照着填」卡片。"""
+        token = str(self.config.get("auth_token") or "").strip()
+        if not token:
+            return "[手机连接信息]" + chr(10) + "密钥还没生成成功。请先重载插件，再发一次 /health setup。"
+        if not self._listen_port:
+            reason = self._listen_error or "端口被占用"
+            return (
+                "[手机连接信息]" + chr(10)
+                + f"接收端没有启动成功（{reason}）。" + chr(10)
+                + "在插件配置里把 listen_port 改成 8788 后重载插件，再发一次 /health setup。"
+            )
+
+        ip = self._local_ip()
+        base = f"http://{ip}:{self._listen_port}"
+        lines = [
+            "[手机连接信息]",
+            f"上报地址：{base}{ENDPOINT_PATH}",
+            f"密钥：{token}",
+            f"看板：{base}/health/dashboard",
+            "",
+            "手机和电脑要连同一个 Wi-Fi。",
+            "把地址和密钥填进手机端一次就行。",
+            "只会发私聊，不会发到群里。",
+        ]
+        if ip in ("127.0.0.1", "0.0.0.0"):
+            lines.append("注意：没拿到局域网 IP，手机若不在同一台机器上，请把 127.0.0.1 换成电脑的局域网 IP。")
+        return chr(10).join(lines)
 
     def _render_baseline(self) -> str:
         """健康基线文本。"""
@@ -1608,9 +1751,14 @@ class HealthBridge(Star):
         """主动关怀运行状态。"""
         baseline = int(self.config.get("baseline_days", 7))
         have = len(self.monitor._load_recent(baseline))
+        receive = (
+            f"✅ 端口 {self._listen_port}" if self._listen_port
+            else f"❌ {self._listen_error or '未启动'}"
+        )
         lines = [
             "[健康主动关怀 状态]",
             f"启用     : {'✅' if self._monitor_runtime_enabled else '❌'}",
+            f"接收端   : {receive}",
             f"轮询间隔 : {int(self.config.get('check_interval', 900))}s",
             f"基线天数 : {have}/{baseline}",
             f"静默时段 : {int(self.config.get('quiet_hours_start', 23))} - "

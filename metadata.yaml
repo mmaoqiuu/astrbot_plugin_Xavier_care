@@ -1,6 +1,6 @@
 name: astrbot_plugin_Xavier_care
 display_name: 小狗健康
-desc: 接收手机推送的健康数据并存储，提供 LLM 工具供角色读取；内置异常检测与主动关怀。
-version: v2.0.10
+desc: 接收手机推送的健康数据并存储；内置心率镜像（日常静默、高唤醒按梯级报心跳）、异常检测与主动关怀，默认只在一个固定会话生效。
+version: v2.3.2
 author: pupotato
 repo: https://github.com/mmaoqiuu/astrbot_plugin_Xavier_care

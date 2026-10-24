@@ -48,6 +48,9 @@ _LEVEL_RULES = (
             "买菜",
             "上班",
             "通勤",
+            "街上",
+            "上街",
+            "路上",
         ),
     ),
     (
@@ -56,6 +59,8 @@ _LEVEL_RULES = (
             "窝",
             "沙发",
             "床",
+            "被窝",
+            "地毯",
             "看书",
             "看漫画",
             "漫画",
@@ -63,16 +68,24 @@ _LEVEL_RULES = (
             "宅",
             "在家",
             "躺",
+            "躺平",
+            "躺尸",
             "睡",
             "发呆",
+            "放空",
             "游戏",
+            "懒得",
+            "没动",
+            "不出门",
+            "没出门",
+            "慢吞吞",
         ),
     ),
 )
 
 # 档位：步数范围、活动分钟范围、基础心率范围
 _LEVEL_RANGES = {
-    0: ((1200, 2500), (5, 15), (40, 48)),
+    0: ((700, 1500), (5, 15), (40, 48)),
     1: ((3000, 4500), (15, 30), (44, 53)),
     2: ((5000, 7000), (25, 45), (49, 59)),
     3: ((8000, 13000), (70, 90), (70, 82)),
@@ -123,8 +136,38 @@ def _extract_current(data: dict) -> tuple[str, str, str]:
             or ""
         )
         mood = str(current.get("mood") or current.get("emotion") or "")
-    summary = str(data.get("summary") or data.get("today") or "")
+    summary = str(
+        data.get("summary")
+        or data.get("today")
+        or data.get("schedule_summary")
+        or ""
+    )
+    if not schedule:
+        schedule = str(data.get("schedule_summary") or "")
     return schedule.strip(), mood.strip(), summary.strip()
+
+
+def _pick_timeline(data: dict, now: datetime) -> str:
+    """按当前时段从 timeline 里挑一段，找不到就返回空串。"""
+    items = data.get("timeline")
+    if not isinstance(items, list) or not items:
+        return ""
+    hour = now.hour
+    if hour < 11:
+        want = ("上午", "早上", "早晨", "清晨")
+    elif hour < 14:
+        want = ("中午", "午间", "午饭")
+    elif hour < 18:
+        want = ("下午",)
+    else:
+        want = ("晚上", "夜晚", "夜里", "深夜")
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("time") or "").strip() in want:
+            text = item.get("schedule") or item.get("activity") or item.get("doing") or ""
+            return str(text).strip()
+    return ""
 
 
 def _progress(now: datetime) -> float:
@@ -166,10 +209,12 @@ def build_snapshot(data_dir: Path, now: datetime | None = None) -> dict:
 
     schedule, mood, summary = _extract_current(data)
     # 当前正在做什么优先；没有 current 才退回今日摘要。
-    source_text = _blob(schedule, mood) or summary
+    timeline_text = _pick_timeline(data, now)
+    source_text = _blob(schedule, mood, timeline_text) or summary
     level = _pick_level(source_text)
     (step_lo, step_hi), (ex_lo, ex_hi), (hr_lo, hr_hi) = _LEVEL_RANGES[level]
-    seed = f"{today}:{level}:{schedule}:{summary}"
+    # 种子只用当天稳定文本，避免随小时换一个 target 导致步数倒退
+    seed = f"{today}:{level}:{summary or schedule}"
     step_target = _stable_int(seed + ":steps", step_lo, step_hi)
     exercise_target = _stable_int(seed + ":exercise", ex_lo, ex_hi)
     base_hr = _stable_int(seed + ":hr", hr_lo, hr_hi)

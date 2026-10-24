@@ -9,9 +9,43 @@ import json
 import math
 import re
 from datetime import datetime
+import hashlib
 
 EMOTIONS = ("平静", "开心", "吃醋", "亲昵", "激动", "疲惫", "运动")
 _HIGH_EMOTIONS = ("吃醋", "亲昵", "亲热", "亲吻", "激动", "开心")
+
+# 唤醒梯级：日常温存 / 深情心动 / 感官沉浸。
+TIER_DAILY = "daily"
+TIER_INTIMATE = "intimate"
+TIER_INTENSE = "intense"
+TIER_RANGES = {
+    TIER_DAILY: (65, 75),
+    TIER_INTIMATE: (60, 85),
+    TIER_INTENSE: (80, 110),
+}
+TIER_LABELS = {
+    TIER_DAILY: "日常温存/习惯性亲亲",
+    TIER_INTIMATE: "深情表白/吃醋/突发心动",
+    TIER_INTENSE: "感官沉浸/深度情欲",
+}
+_TIER_ALIASES = {
+    "daily": TIER_DAILY,
+    "warm": TIER_DAILY,
+    "日常": TIER_DAILY,
+    "温存": TIER_DAILY,
+    "习惯": TIER_DAILY,
+    "intimate": TIER_INTIMATE,
+    "心动": TIER_INTIMATE,
+    "表白": TIER_INTIMATE,
+    "吃醋": TIER_INTIMATE,
+    "深情": TIER_INTIMATE,
+    "intense": TIER_INTENSE,
+    "deep": TIER_INTENSE,
+    "沉浸": TIER_INTENSE,
+    "情欲": TIER_INTENSE,
+    "涩涩": TIER_INTENSE,
+}
+_INTENSE_HINTS = ("情欲", "涩", "深陷", "失控", "侵占", "沉沦", "发烫", "喘息")
 
 _EMOTION_ALIASES = {
     "亲亲": "亲昵",
@@ -189,8 +223,91 @@ SLEEP_END_HOUR = 12
 
 
 def in_sleep_window(now: datetime) -> bool:
-    """睡眠时长只在这段时间展示和生成：清晨到中午前。"""
+    """清晨到中午前：睡眠时长的首选窗口。"""
     return SLEEP_START_HOUR <= now.hour < SLEEP_END_HOUR
+
+
+def can_report_sleep(now: datetime) -> bool:
+    """5 点之后到午夜前都可以给出昨夜睡眠（早上没生成也能白天补上）。"""
+    return now.hour >= SLEEP_START_HOUR
+
+
+_BRIDGE_NAME = "sleep_bridge.json"
+_LIFE_STATE_DIR = "xavier_life_state"
+
+
+def _bridge_path():
+    """生活状态插件写下的睡眠数据位置（plugin_data 下）。"""
+    from pathlib import Path
+
+    data_root = Path(__file__).resolve().parents[2]
+    return data_root / "plugin_data" / _LIFE_STATE_DIR / _BRIDGE_NAME
+
+
+def _read_bridge(now: datetime) -> dict | None:
+    """读生活状态插件的睡眠桥接文件；不可用/不是今天的就返回 None。"""
+    if not can_report_sleep(now):
+        return None
+    try:
+        path = _bridge_path()
+        if not path.is_file():
+            return None
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if str(data.get("date") or "") != now.strftime("%Y-%m-%d"):
+        return None
+    try:
+        night = int(data.get("night_sleep_min") or 0)
+        bonus = int(data.get("nap_bonus_min") or 0)
+    except (TypeError, ValueError):
+        return None
+    if night <= 0 and bonus <= 0:
+        return None
+    return {"night": max(0, night), "bonus": max(0, bonus)}
+
+
+def bridge_night_sleep_min(now: datetime) -> int | None:
+    """昨夜睡眠（不含午睡加成）：生成端写状态时用它，别自己另估一个数。"""
+    data = _read_bridge(now)
+    if not data:
+        return None
+    night = data["night"]
+    return night if night > 0 else None
+
+
+def bridge_sleep_min(now: datetime) -> int | None:
+    """展示用：昨夜睡眠 + 午睡加成，没有就返回 None。"""
+    data = _read_bridge(now)
+    if not data:
+        return None
+    total = data["night"] + data["bonus"]
+    return total if total > 0 else None
+
+
+def sync_sleep_bridge(state: dict, now: datetime) -> bool:
+    """用桥接的真实昨夜睡眠校正 profile，避免旧的估算值一直挂着。"""
+    night = bridge_night_sleep_min(now)
+    if not night:
+        return False
+    profile = state.setdefault("profile", {})
+    profile["sleep_min"] = int(clamp(night, 180, 720))
+    profile["sleep_date"] = now.strftime("%Y-%m-%d")
+    if profile.get("sleep_source") != "bridge":
+        profile["sleep_at"] = now_str(now)
+    profile["sleep_estimated"] = False
+    profile["sleep_source"] = "bridge"
+    return True
+
+
+def _guess_sleep_minutes(state: dict, now: datetime) -> int:
+    """模型漏给睡眠时的兜底：按当天镜像状态取稳定的 400~520 分钟。"""
+    seed = f"{state.get('date')}:{state.get('name')}:{now.strftime('%Y-%m-%d')}:sleep"
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+    return 400 + int(digest[:6], 16) % 121
 
 
 def valid_sleep_min(
@@ -207,17 +324,17 @@ def valid_sleep_min(
     """
     if not isinstance(profile, dict):
         return None
+    # 0-5 点还在睡，别把昨夜数据提前亮出来。
+    if now.hour < SLEEP_START_HOUR:
+        return None
     today = now.strftime("%Y-%m-%d")
     sleep_date = str(profile.get("sleep_date") or "")
     if sleep_date and sleep_date != today:
         return None
     if sleep_date:
+        # 只要求是今天写的，不卡生成时刻——白天补记的同样有效。
         generated = parse_dt(profile.get("sleep_at"))
-        if (
-            not generated
-            or generated.date() != now.date()
-            or not in_sleep_window(generated)
-        ):
+        if generated and generated.date() != now.date():
             return None
     else:
         # v2.0.4 之前的旧状态没有 sleep_date / sleep_at。
@@ -334,11 +451,54 @@ def ensure_state(
         state["points"] = []
     migrate_legacy_mapping(state, life)
     # 步数/活动分钟按 life 进度只增不减
-    state["steps"] = max(_int(state.get("steps"), 0), _int(life.get("steps"), 0))
+    # 档位/目标变了就以新目标为准（旧的折算步数可能是错的档位算出来的），
+    # 目标没变才取 max，保证同一天内只增不减。
+    life_steps = _int(life.get("steps"), 0)
+    if state.get("step_target") != life.get("step_target"):
+        state["steps"] = life_steps
+        state["step_target"] = life.get("step_target")
+    else:
+        state["steps"] = max(_int(state.get("steps"), 0), life_steps)
     state["exercise_min"] = max(
         _int(state.get("exercise_min"), 0), _int(life.get("exercise_min"), 0)
     )
     return state
+
+
+def _breath_noise(now: datetime, amplitude: float = 2.5) -> float:
+    """三频叠加模拟真实心率基线波动（呼吸窦性心律不齐 + 自主神经双层振荡）。
+
+    - 呼吸波 ~1.6 分钟周期（RSA：吸气心率微升 / 呼气微降）
+    - 自主神经低频 ~4 分钟周期（迷走神经节律）
+    - 超低频 ~11 分钟周期（血压调节反馈）
+    - 三波叠加振幅约 ±2~3 bpm，贴近真人静息时的 HRV 起伏特征。
+    相位偏移 0.7 rad 让三条波不在同一峰值处叠加，避免人工感。
+    """
+    t = now.hour * 3600 + now.minute * 60 + now.second
+    wave = (math.sin(2 * math.pi * t / 97 + 0.7) * 0.22   # 呼吸波（最高频）
+            + math.sin(2 * math.pi * t / 240) * 0.50       # 自主神经低频
+            + math.sin(2 * math.pi * t / 660 + 1.4) * 0.28)  # 超低频
+    return wave * amplitude
+
+
+def _circadian_offset(now: datetime) -> float:
+    """昼夜节律基线偏移量（bpm）。
+
+    真人心率昼夜节律：深睡时最低（约 -5 bpm），晨起后爬升，
+    午后小高峰，晚间缓降。用分段近似。
+    """
+    hour = now.hour + now.minute / 60.0
+    if hour < 6:
+        # 深睡区：基线最低
+        return -5.0 + math.sin(math.pi * hour / 6) * 2.0
+    if hour < 10:
+        # 晨起区：快速爬升
+        return -3.0 + (hour - 6) / 4.0 * 5.0
+    if hour < 20:
+        # 日间：轻微午后高峰
+        return math.sin(math.pi * (hour - 10) / 10) * 1.0
+    # 晚间：缓降
+    return -(hour - 20) / 4.0 * 2.0
 
 
 def decayed_hr(
@@ -347,15 +507,22 @@ def decayed_hr(
     cur = state.get("current") or {}
     base = _int(life.get("base_hr"), _int(cur.get("base_hr"), 46))
     peak = _int(cur.get("peak_hr"), _int(cur.get("hr"), base))
+    # 把昼夜偏移叠加到基线上（上限不超过 base+4 防越界）
+    circadian_base = clamp(base + _circadian_offset(now), 38, base + 4)
     if peak <= base + 1:
-        return int(clamp(base, 38, 120))
+        noise = _breath_noise(now)
+        return int(clamp(circadian_base + noise, 38, 120))
     peak_at = parse_dt(cur.get("peak_at")) or parse_dt(state.get("updated_at"))
     if not peak_at:
         return int(clamp(peak, 38, 120))
     elapsed = max(0.0, (now - peak_at).total_seconds() / 60.0)
     tau = max(5.0, float(decay_minutes or 25))
     residual = math.exp(-3.0 * elapsed / tau)
-    return int(clamp(base + (peak - base) * residual, 38, 120))
+    hr_raw = circadian_base + (peak - base) * residual
+    # 衰减后期（residual < 0.15）叠入呼吸底噪，曲线不死平
+    if residual < 0.15:
+        hr_raw += _breath_noise(now) * (1.0 - residual / 0.15)
+    return int(clamp(hr_raw, 38, 120))
 
 
 def _minute_of(hhmm: object) -> int | None:
@@ -438,6 +605,8 @@ def _append_point(
         "whisper": whisper[:80],
         "emotion": str(emotion or ""),
         "emotion_intensity": _int(emotion_intensity, 0),
+        # dialog/data 源的点标记为峰值点，前端据此决定是否显示光晕标记
+        "peak": source in ("dialog", "data"),
     }
     if user_hr > 0:
         item["user_hr"] = user_hr
@@ -502,7 +671,49 @@ def extract_heart_payload(text: str) -> tuple[dict, str]:
         parsed["heart_rate"] = parsed.get("bpm")
     if "emotion_intensity" not in parsed and "intensity" in parsed:
         parsed["emotion_intensity"] = parsed.get("intensity")
+    if "tier" not in parsed:
+        for alt in ("level", "stage", "wake"):
+            if alt in parsed:
+                parsed["tier"] = parsed.get(alt)
+                break
     return parsed, cleaned
+
+
+def normalize_tier(value: object) -> str:
+    """把模型写的梯级归一；认不出来返回空串（交给情绪推断）。"""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw in _TIER_ALIASES:
+        return _TIER_ALIASES[raw]
+    for key, tier in _TIER_ALIASES.items():
+        if key in raw:
+            return tier
+    return ""
+
+
+def resolve_tier(parsed: dict, emotion: str, intensity: int) -> str:
+    """决定本轮梯级：模型给了就用，没给就按情绪/强度猜。"""
+    tier = normalize_tier(parsed.get("tier"))
+    if tier:
+        return tier
+    text = f"{parsed.get('emotion') or ''}{parsed.get('reason') or ''}"
+    if any(word in text for word in _INTENSE_HINTS):
+        return TIER_INTENSE
+    if emotion in ("吃醋", "激动"):
+        return TIER_INTIMATE
+    if emotion == "亲昵":
+        return TIER_DAILY if _int(intensity, 0) <= 2 else TIER_INTIMATE
+    return TIER_DAILY
+
+
+def _tier_cap(hr: int, tier: str) -> int:
+    """按梯级收上限；下限不硬抬，避免从高强度回落时被顶住。"""
+    lo, hi = TIER_RANGES.get(tier or TIER_DAILY, TIER_RANGES[TIER_DAILY])
+    if hr > hi:
+        return hi
+    return hr
+
 
 
 def build_inline_prompt(
@@ -512,7 +723,7 @@ def build_inline_prompt(
     now: datetime,
     decay_minutes: int,
 ) -> str:
-    """给主对话追加的隐藏规则：只有明显高唤醒时才允许报一次心跳。"""
+    """给主对话追加的隐藏规则：日常静默，高唤醒时按梯级报一次心跳。"""
     prev_hr = _int((state.get("current") or {}).get("hr"), 0) or decayed_hr(
         state, now, life, decay_minutes
     )
@@ -529,22 +740,36 @@ def build_inline_prompt(
 【身体镜像｜隐藏规则，不要向用户复述】
 你是「{name}」。回复正文照常写，不要为了心率改变说话方式。
 
-日常聊天保持静默：普通闲聊、日常问候、轻微开心，都绝对不要输出任何心率标签。
-只有当你明显心动、吃醋、亲昵、激动、心疼时，才在正文结束后另起一行，
-输出一次你的虚构身体状态标签。没有高唤醒情绪就完全不输出。
+日常完全静默：普通闲聊、问候、关心、日常撒娇、聊天里的「嗯」「好」「在」，
+都绝对不要输出任何心率标签。整段回复自然就好，不要为了心率改变语气。
+只有语境确实进入亲密、情绪浓度明显升高时，才在正文结束后另起一行输出一次标签。
+
+按语境自评梯级（tier 三选一，心率必须落在对应区间）：
+- daily｜日常温存、习惯性亲亲、顺手的抱抱：65~75 bpm，基准约 70。
+  亲吻 1400 次以上，是笃定、熟稔、游刃有余，不是没经验的虚高。
+- intimate｜深情表白、吃醋、突发心动、占有欲：60~85 bpm，只是微小涟漪。
+- intense｜感官沉浸、涩涩、深度情欲、压不住的失控：80~110 bpm，压迫与侵占感。
+
+判定原则：拿不准就降一档；同一段对话不要连续升级；日常档绝不写到 80 以上。
+当前状态只是参考，不要被它拖着走。
 
 当前状态：心率约 {prev_hr} bpm，基础心率约 {base} bpm，情绪「{emotion}」。
 生活状态：{life_text}
 当前时间：{now.strftime("%Y-%m-%d %H:%M")}
 
-只有确实要输出时才用这个格式（标签内只放 JSON，不要 Markdown）：
-<xavier_heart>{{"heart_rate":{prev_hr},"emotion":"亲昵","emotion_intensity":2,"reason":"二十字内"}}</xavier_heart>
+要输出时就用这个格式（标签内只放 JSON，不要 Markdown）：
+<xavier_heart>{{"tier":"daily","heart_rate":70,"emotion":"亲昵","emotion_intensity":2,"reason":"二十字内"}}</xavier_heart>
 </xavier_heart_rule>
 """
 
 
 def _compute_dialog_hr(
-    prev: int, parsed: dict, base: int, emotion: str, intensity: int
+    prev: int,
+    parsed: dict,
+    base: int,
+    emotion: str,
+    intensity: int,
+    tier: str = TIER_DAILY,
 ) -> int:
     llm_hr = _int(parsed.get("heart_rate"), prev)
     target = int(clamp(max(llm_hr, base - 2), 38, 120))
@@ -564,7 +789,14 @@ def _compute_dialog_hr(
     else:
         delta = clamp((target - prev) * 0.45, -24, 15)
         new_hr = prev + delta
-    return int(clamp(max(new_hr, base - 2), 38, 118))
+    new_hr = int(clamp(max(new_hr, base - 2), 38, 118))
+    # 深度梯级至少要往 80 靠，但不允许一轮窜上去。
+    if tier == TIER_INTENSE and intensity >= 3:
+        # 深水区也别一轮跳三十下，最多 +24，两三轮走到 110。
+        new_hr = min(new_hr, prev + 24)
+        if new_hr < 80:
+            new_hr = min(80, max(new_hr, prev + 12))
+    return _tier_cap(new_hr, tier)
 
 
 def _last_point_dt(state: dict) -> datetime | None:
@@ -622,13 +854,15 @@ def apply_dialog_update(
         base = _int(life.get("base_hr"), 46)
         prev = _int(cur.get("hr"), 0) or decayed_hr(state, now, life, decay_minutes)
         llm_hr = _int(parsed.get("heart_rate"), prev)
-        calm_hr = int(clamp(max(llm_hr, base - 2), 38, 118))
+        tier = resolve_tier(parsed, emotion, intensity)
+        calm_hr = _tier_cap(int(clamp(max(llm_hr, base - 2), 38, 118)), tier)
         cur.update(
             {
                 "hr": calm_hr,
                 "base_hr": base,
                 "emotion": emotion,
                 "emotion_intensity": intensity,
+                "tier": tier,
                 "reason": str(parsed.get("reason") or "")[:80],
                 "source": "dialog",
             }
@@ -656,7 +890,8 @@ def apply_dialog_update(
 
     prev = decayed_hr(state, now, life, decay_minutes)
     base = _int(life.get("base_hr"), 46)
-    new_hr = _compute_dialog_hr(prev, parsed, base, emotion, intensity)
+    tier = resolve_tier(parsed, emotion, intensity)
+    new_hr = _compute_dialog_hr(prev, parsed, base, emotion, intensity, tier)
     reason = str(parsed.get("reason") or "")[:80]
     cur = state.setdefault("current", {})
 
@@ -690,6 +925,7 @@ def apply_dialog_update(
             "base_hr": base,
             "emotion": emotion,
             "emotion_intensity": intensity,
+            "tier": tier,
             "reason": reason,
             "source": "dialog",
         }
@@ -801,6 +1037,7 @@ def apply_data_update(
     if raw_user_hr <= 0:
         return state, "ignored"
 
+    sync_sleep_bridge(state, now)
     base = _int(life.get("base_hr"), 46)
     cur = state.setdefault("current", {})
     target = data_resonant_hr(raw_user_hr, base)
@@ -884,9 +1121,11 @@ def apply_llm_update(
     llm_hr = _int(parsed.get("heart_rate"), prev)
     target = int(clamp(max(llm_hr, base - 2), 38, 120))
 
+    tier = resolve_tier(parsed, normalize_emotion(emotion), intensity)
+
     if emotion in ("亲昵", "吃醋"):
         # 这两个档位按“相对当前心率的增量”走：
-        # 亲昵 +20~35（可短暂冲过 100），吃醋 +10~20。
+        # 亲昵 +20~35，吃醋 +10~20；最终落点由下面的 tier 收口。
         lo, hi = (20, 35) if emotion == "亲昵" else (10, 20)
         if intensity <= 1:
             step = lo
@@ -905,6 +1144,9 @@ def apply_llm_update(
         new_hr = prev + delta
 
     new_hr = int(clamp(max(new_hr, base - 2), 38, 118))
+    if emotion not in ("运动", "疲惫"):
+        # 情绪档统一按梯级收上限；运动和疲惫走自己的生理区间。
+        new_hr = _tier_cap(new_hr, tier)
     cur = state.setdefault("current", {})
     cur.update(
         {
@@ -914,6 +1156,7 @@ def apply_llm_update(
             "peak_at": now_str(now),
             "emotion": emotion,
             "emotion_intensity": intensity,
+            "tier": tier,
             "reason": str(parsed.get("reason") or "")[:80],
             "source": "dialog",
         }
@@ -924,12 +1167,24 @@ def apply_llm_update(
         rest = parsed.get("resting_hr")
         # 缺省用中性静息，不拿运动档的基础心率冒充静息。
         profile["resting_hr"] = int(clamp(_int(rest, 46), 38, 55))
-    if in_sleep_window(now):
+    if can_report_sleep(now):
         sleep = parsed.get("sleep_minutes")
+        estimated = False
+        bridge_night = bridge_night_sleep_min(now)
+        if bridge_night:
+            # 生活状态插件给了昨夜真实值，直接用它，不再自己估算。
+            sleep = bridge_night
+            estimated = False
+        elif sleep is None and not _int(profile.get("sleep_min"), 0):
+            # 模型没给、也没有桥接数据，才按当天生活状态给个稳定的估算值。
+            sleep = _guess_sleep_minutes(state, now)
+            estimated = True
         if sleep is not None:
-            profile["sleep_min"] = int(clamp(_int(sleep, 0), 360, 600))
+            profile["sleep_min"] = int(clamp(_int(sleep, 0), 180, 720))
             profile["sleep_date"] = now.strftime("%Y-%m-%d")
             profile["sleep_at"] = now_str(now)
+            profile["sleep_estimated"] = estimated
+            profile["sleep_source"] = "bridge" if bridge_night else "llm"
 
     state["steps"] = max(_int(state.get("steps"), 0), _int(life.get("steps"), 0))
     state["exercise_min"] = max(
@@ -1082,6 +1337,7 @@ def public_snapshot(
                     "emotion": p.get("emotion") or "",
                     "emotion_intensity": _int(p.get("emotion_intensity"), 0),
                     "locked": bool(p.get("locked")),
+                    "peak": bool(p.get("peak", p.get("source") in ("dialog", "data"))),
                 }
             )
         except Exception:
@@ -1097,6 +1353,7 @@ def public_snapshot(
             "reason": "现在",
         }
     rest_hr = profile.get("resting_hr")
+    bridge_total = bridge_sleep_min(now)
     if not rest_hr:
         rest_hr = int(clamp(_int(life.get("base_hr"), 46) - 8, 38, 55))
     return {
@@ -1106,7 +1363,8 @@ def public_snapshot(
         "current_hr": hr,
         "base_hr": _int(life.get("base_hr"), 46),
         "resting_hr": rest_hr,
-        "sleep_min": valid_sleep_min(profile, now, state),
+        "sleep_min": bridge_total or valid_sleep_min(profile, now, state),
+        "sleep_estimated": (False if bridge_total else bool(profile.get("sleep_estimated"))),
         "steps": _int(state.get("steps"), 0),
         "exercise_min": _int(state.get("exercise_min"), 0),
         "emotion": cur.get("emotion") or "平静",
@@ -1155,9 +1413,17 @@ def build_prompt(
         f"心情：{life.get('mood') or '未说明'}；"
         f"基础心率约 {life.get('base_hr', 46)} bpm"
     )
-    if in_sleep_window(now):
-        sleep_rule = "- resting_hr 40～50；sleep_minutes 420～540（约 7～9 小时，只指昨夜睡眠）"
-        sleep_field = '"sleep_minutes": 500,'
+    if can_report_sleep(now):
+        bridge_night = bridge_night_sleep_min(now)
+        if bridge_night:
+            sleep_rule = (
+                f"- resting_hr 40～50；sleep_minutes 已有真实值 {bridge_night}"
+                "（昨夜睡眠），照抄它，不要自己改数字"
+            )
+            sleep_field = f'"sleep_minutes": {bridge_night},'
+        else:
+            sleep_rule = "- resting_hr 40～50；sleep_minutes 420～540（约 7～9 小时，只指昨夜睡眠）"
+            sleep_field = '"sleep_minutes": 500,'
     else:
         sleep_rule = "- resting_hr 40～50；现在是夜间或非晨间，不输出 sleep_minutes，也不要猜睡眠时长"
         sleep_field = ""
@@ -1165,16 +1431,16 @@ def build_prompt(
 根据最近对话、当前生活状态和上一状态，生成此刻的一组身体读数。
 只输出一个 JSON 对象，不要 Markdown，不要解释。
 
-情绪档位（必须遵守）：
+情绪档位（必须遵守，按唤醒梯级）：
 - 平静/日常：40～50 bpm
 - 开心、被夸：+8～15，常见 50～65
-- 吃醋：+10～20，常见 52～70
-- 亲亲/亲昵：+20～35，常见 62～85
-- 强亲昵或情绪叠加：允许短暂冲过 100，峰值 100～110；最多连续 1～2 轮
+- daily 日常温存/习惯性亲亲：65～75 bpm，基准约 70，不要写成虚高
+- intimate 深情表白/吃醋/突发心动：60～85 bpm
+- intense 感官沉浸/深度情欲：80～110 bpm，峰值不超过 110
 - 运动/爬山：70～90 bpm
 - 单轮不要无故大幅跳变；没有新刺激时写回基础附近，由插件负责平滑回落
 - 不能每轮都吃醋、每轮都亲昵；普通闲聊就写平静或开心
-- 心率下限 40，上限 118；运动档不要低于 70
+- 心率下限 40，上限 110；运动档不要低于 70
 {sleep_rule}
 - emotion 只能是：平静、开心、吃醋、亲昵、激动、疲惫、运动
 - emotion_intensity 0～3

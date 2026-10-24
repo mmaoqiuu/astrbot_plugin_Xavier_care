@@ -247,8 +247,8 @@
     .hr-moment-card.show { display: block; animation: momentIn .2s ease-out; }
     @keyframes momentIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
     .hr-moment-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-    .hr-moment-title { font-size: 12px; letter-spacing: .08em; color: #A98A4E; }
-    .hr-moment-title::before { content: "✦"; margin-right: 5px; color: #C9A45F; }
+    .hr-moment-title { font-size: 12px; letter-spacing: .08em; color: #8E72A8; }
+    .hr-moment-title::before { content: "✦"; margin-right: 5px; color: #B8A4D9; }
     .hr-moment-close {
       border: 0; background: transparent; color: #BDB4A2;
       font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer;
@@ -606,6 +606,8 @@
     let currentView = "today";
     let latestHealthData = {};
     let latestMirror = {};
+    // peak 点呼吸脉冲动画循环
+    let _hrPulseRaf = null;
 
     // ========== 视图切换 ==========
     function switchView(view) {
@@ -854,7 +856,8 @@
       set("coupleHimHr", himHr != null ? himHr : "--");
       const himRest = himOk ? asInt(mirror.resting_hr) : null;
       set("coupleHimRest", himRest != null ? himRest : "--");
-      set("coupleHimSleep", fmtDurationCN(mirror.sleep_min));
+      const himSleep = fmtDurationCN(mirror.sleep_min);
+      set("coupleHimSleep", mirror.sleep_estimated && mirror.sleep_min ? "约" + himSleep : himSleep);
       set("coupleHimSteps", himOk ? fmtSteps(mirror.steps) : "--");
       set("coupleHimState", himOk ? "在线" : "未同步");
       setDot("coupleHimDot", himOk ? "ok" : "idle");
@@ -916,22 +919,79 @@
         if (hrChart) hrChart.destroy();
         
         // 阴影渐变
+        // 小狗：浅粉
         const meFill = ctx.createLinearGradient(0, 0, 0, 240);
-        meFill.addColorStop(0, "rgba(217, 161, 176, .22)");
-        meFill.addColorStop(.72, "rgba(217, 161, 176, .05)");
-        meFill.addColorStop(1, "rgba(217, 161, 176, 0)");
+        meFill.addColorStop(0, "rgba(240, 185, 195, .22)");
+        meFill.addColorStop(.72, "rgba(240, 185, 195, .05)");
+        meFill.addColorStop(1, "rgba(240, 185, 195, 0)");
+
+        // 沈星回：浅紫
+        const himFill = ctx.createLinearGradient(0, 0, 0, 240);
+        himFill.addColorStop(0, "rgba(184, 164, 217, .18)");
+        himFill.addColorStop(.72, "rgba(184, 164, 217, .04)");
+        himFill.addColorStop(1, "rgba(184, 164, 217, 0)");
         
-        // 发光插件
+        // 发光插件（线条阴影 + peak点光晕环 + 末尾点脉冲）
+        let _pulsePhase = 0;
         const hrGlow = {
           id: "hrGlow",
           beforeDatasetDraw(chart, args) {
             const c = chart.ctx;
             c.save();
-            c.shadowColor = args.index === 0 ? "rgba(217,161,176,.34)" : "rgba(201,164,95,.38)";
+            c.shadowColor = args.index === 0 ? "rgba(240,185,195,.34)" : "rgba(184,164,217,.38)";
             c.shadowBlur = 7;
             c.shadowOffsetY = 1;
           },
-          afterDatasetDraw(chart) { chart.ctx.restore(); },
+          afterDatasetDraw(chart, args) {
+            chart.ctx.restore();
+            // 只在沈星回曲线（index=1）绘制 peak 光晕
+            if (args.index !== 1) return;
+            const ds = chart.data.datasets[1];
+            if (!ds || !ds.data || !ds.data.length) return;
+            const c = chart.ctx;
+            const xScale = chart.scales.x;
+            const yScale = chart.scales.y;
+            if (!xScale || !yScale) return;
+
+            _pulsePhase = (_pulsePhase + 0.04) % (Math.PI * 2);
+            const pulse = Math.sin(_pulsePhase) * 0.5 + 1.5; // 1.0 ~ 2.0
+
+            ds.data.forEach((pt, i) => {
+              if (!pt || pt.source === "auto_rest") return;
+              const isPeak = pt.peak;
+              const isLast = i === ds.data.length - 1;
+              const isSelected = i === selectedHimIndex;
+              if (!isPeak && !isLast) return;
+
+              const px = xScale.getPixelForValue(pt.x);
+              const py = yScale.getPixelForValue(pt.hr);
+              if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+
+              c.save();
+              if (isSelected || isLast) {
+                // 呼吸脉冲外圈（浅紫）
+                const outerR = isSelected ? 10 + pulse : 7 + pulse * 0.7;
+                const grad = c.createRadialGradient(px, py, 2, px, py, outerR);
+                grad.addColorStop(0, "rgba(184,164,217,.45)");
+                grad.addColorStop(0.5, "rgba(184,164,217,.18)");
+                grad.addColorStop(1, "rgba(184,164,217,0)");
+                c.beginPath();
+                c.arc(px, py, outerR, 0, Math.PI * 2);
+                c.fillStyle = grad;
+                c.fill();
+              } else if (isPeak) {
+                // 静态小光晕（浅紫）
+                const grad = c.createRadialGradient(px, py, 1.5, px, py, 7);
+                grad.addColorStop(0, "rgba(184,164,217,.30)");
+                grad.addColorStop(1, "rgba(184,164,217,0)");
+                c.beginPath();
+                c.arc(px, py, 7, 0, Math.PI * 2);
+                c.fillStyle = grad;
+                c.fill();
+              }
+              c.restore();
+            });
+          },
         };
         
         // 垂直辅助线插件（线在曲线下方，点在上方）
@@ -962,7 +1022,7 @@
             c.save();
             c.beginPath();
             c.arc(x, y, 3.5, 0, Math.PI * 2);
-            c.fillStyle = "#A98A4E";
+            c.fillStyle = "#8E72A8";
             c.fill();
             c.restore();
           },
@@ -972,40 +1032,49 @@
         const datasets = [{
           label: "我 · 实测",
           data: realPts,
-          borderColor: "#D9A1B0",
+          borderColor: "#F0B9C3",
           backgroundColor: meFill,
           borderWidth: 2.2,
-          tension: 0.4, // 平滑曲线
+          tension: 0.3, // 适度平滑，避免过度圆润
           cubicInterpolationMode: "monotone", // 防止穿模
           borderJoinStyle: "round",
           borderCapStyle: "round",
           borderDash: [], // 强制实线
           spanGaps: true, // 不断线
           fill: "origin",
-          pointRadius: (c) => (c.dataIndex === c.dataset.data.length - 1 ? 4.6 : 2.6),
+          // 末尾点稍大，其余统一小巧
+          pointRadius: (c) => (c.dataIndex === c.dataset.data.length - 1 ? 4.6 : 2.2),
           pointHoverRadius: 5.4,
           pointStyle: "circle",
-          pointBackgroundColor: "#D9A1B0",
+          pointBackgroundColor: "#F0B9C3",
           pointBorderColor: "#FFFEFC",
           pointBorderWidth: 1.6,
           order: 2,
         }, {
           label: "沈星回",
           data: himAll,
-          borderColor: "#C9A45F",
-          backgroundColor: "#C9A45F",
+          borderColor: "#B8A4D9",
+          backgroundColor: himFill,
           borderWidth: 2.2,
-          tension: 0.4,
+          tension: 0.3,
           cubicInterpolationMode: "monotone",
           borderJoinStyle: "round",
           borderCapStyle: "round",
           borderDash: [], // 强制实线
           spanGaps: true, // 不断线
-          fill: false,
-          pointRadius: (c) => (c.dataIndex === selectedHimIndex ? 6.4 : c.dataIndex === c.dataset.data.length - 1 ? 5 : 2.8),
+          fill: "origin",
+          // peak 点大且醒目；selected 点最大；auto_rest 点隐入背景
+          pointRadius: (c) => {
+            if (c.dataIndex === selectedHimIndex) return 6.4;
+            const pt = c.dataset.data[c.dataIndex];
+            if (!pt) return 1.4;
+            if (pt.source === "auto_rest") return 1.4;
+            if (c.dataIndex === c.dataset.data.length - 1) return 5.0;
+            return pt.peak ? 3.8 : 2.0;
+          },
           pointHoverRadius: 5.8,
           pointStyle: "circle",
-          pointBackgroundColor: "#C9A45F",
+          pointBackgroundColor: "#B8A4D9",
           pointBorderColor: "#FFFEFC",
           pointBorderWidth: 1.8,
           order: 1,
@@ -1019,6 +1088,8 @@
 
         const yVals = realPts.concat(himAll).map(p => p.y).filter(Number.isFinite);
         const yMax = Math.max(120, Math.ceil((Math.max(...yVals) + 4) / 10) * 10);
+        // 动态下限：数据最小值向下留 8 bpm 边距，向下取整到 10 的整倍，且不低于 40
+        const yMin = Math.max(40, Math.floor((Math.min(...yVals) - 8) / 10) * 10);
         
         hrChart = new Chart(ctx, {
           type: "line",
@@ -1110,7 +1181,7 @@
                 },
               },
               y: {
-                min: 40, max: yMax,
+                min: yMin, max: yMax,
                 grid: { color: "#F1ECE9", drawTicks: false },
                 border: { display: false },
                 ticks: {
@@ -1247,9 +1318,23 @@
         if (currentView !== "hr" || document.hidden) return;
         loadHrChart({ silent: true });
       }, 60000);
+      // 启动脉冲动画 RAF 循环（节流至约 24fps）
+      let _lastPulseFrame = 0;
+      function _pulseLoop(ts) {
+        if (ts - _lastPulseFrame >= 42) { // ~24fps
+          _lastPulseFrame = ts;
+          if (currentView === "hr" && hrChart && !document.hidden) {
+            hrChart.update("none");
+          }
+        }
+        _hrPulseRaf = requestAnimationFrame(_pulseLoop);
+      }
+      if (_hrPulseRaf) cancelAnimationFrame(_hrPulseRaf);
+      _hrPulseRaf = requestAnimationFrame(_pulseLoop);
     }
     function stopHrAutoRefresh() {
       if (hrRefreshTimer) { clearInterval(hrRefreshTimer); hrRefreshTimer = null; }
+      if (_hrPulseRaf) { cancelAnimationFrame(_hrPulseRaf); _hrPulseRaf = null; }
     }
 
     // ========== 日历与奶茶 ==========

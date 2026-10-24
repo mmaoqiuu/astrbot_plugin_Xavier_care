@@ -1,344 +1,848 @@
 {
-  "auth_token": {
-    "description": "接收端密钥",
-    "type": "string",
-    "hint": "手机上报时在请求头 X-Auth-Token 里带上同样的值。可留空：插件首次启动会自动生成一串专属随机密钥并填到这里（重载插件后可见）。",
-    "obvious_hint": true
+  "basic": {
+    "type": "object",
+    "description": "关怀总览",
+    "hint": "日常开关和节奏。默认值就能用。",
+    "items": {
+      "monitor_enabled": {
+        "description": "开启主动关怀",
+        "type": "bool",
+        "default": true,
+        "hint": "每天在合适的时候主动发一两句关心。默认开。",
+        "obvious_hint": true
+      },
+      "care_in_chat_enabled": {
+        "description": "聊天里自然关心",
+        "type": "bool",
+        "default": true,
+        "hint": "聊天时顺带照顾她的身体状态。默认开。",
+        "obvious_hint": true
+      },
+      "check_interval": {
+        "description": "多久检查一次（秒）",
+        "type": "int",
+        "default": 900,
+        "hint": "默认 900 秒（15 分钟）。一般不用改。"
+      },
+      "quiet_hours_start": {
+        "description": "安静开始（几点）",
+        "type": "int",
+        "default": 23,
+        "hint": "默认 23 点。这段时间不主动发消息。"
+      },
+      "quiet_hours_end": {
+        "description": "安静结束（几点）",
+        "type": "int",
+        "default": 7,
+        "hint": "默认 7 点。早上 7 点后才可能收到关心。"
+      },
+      "fallback_care": {
+        "description": "备用一句话",
+        "type": "text",
+        "default": "怎么又不舒服了？过来，跟我说说。",
+        "hint": "主动关怀发不出去时用这句兜底。"
+      }
+    }
   },
-  "listen_port": {
-    "description": "接收端监听端口",
-    "type": "int",
-    "default": 8787,
-    "hint": "插件会在这个端口开一个只收 POST 的 HTTP 端点。需在服务器防火墙放行。改完要重载插件。"
+  "receive": {
+    "type": "object",
+    "description": "数据接收",
+    "hint": "手机往哪报、密钥、推送目标。",
+    "items": {
+      "listen_port": {
+        "description": "手机上报端口",
+        "type": "int",
+        "default": 8787,
+        "hint": "默认 8787。被占用会自动往后换，发 /health setup 看实际地址。"
+      },
+      "auth_token": {
+        "description": "上报密钥",
+        "type": "string",
+        "default": "",
+        "hint": "留空即可，插件会自动生成。发 /health setup 可以直接看到。"
+      },
+      "push_target_umo": {
+        "description": "推送到哪个私聊",
+        "type": "string",
+        "default": "",
+        "hint": "留空会自动记住最近一次私聊。只会发私聊，不会发群。"
+      },
+      "retention_days": {
+        "description": "数据保留天数",
+        "type": "int",
+        "default": 180,
+        "hint": "默认保留 180 天，足够看出长期变化。"
+      }
+    }
   },
-  "retention_days": {
-    "description": "数据保留天数",
-    "type": "int",
-    "default": 180,
-    "hint": "超过这个天数的旧数据自动清理。以已存数据里最新的那天为基准往前算。"
+  "guard": {
+    "type": "object",
+    "description": "推送闸门",
+    "hint": "觉得太勤或太安静时再动这里。",
+    "items": {
+      "care_guard_enabled": {
+        "description": "启用推送闸门",
+        "type": "bool",
+        "default": true,
+        "hint": "按簇冷却、每日上限、最小间隔和对话互斥节流。默认开。"
+      },
+      "daily_push_limit": {
+        "description": "每日推送上限（条）",
+        "type": "int",
+        "default": 2,
+        "hint": "经期关怀不占额度；填 0 表示不限。"
+      },
+      "min_push_interval_minutes": {
+        "description": "两条关怀最小间隔（分钟）",
+        "type": "int",
+        "default": 180,
+        "hint": "默认 180 分钟，避免刚说完又补一条。"
+      },
+      "dialog_guard_minutes": {
+        "description": "对话互斥窗口（分钟）",
+        "type": "int",
+        "default": 5,
+        "hint": "最近几分钟有人机往来就不插播，默认 5 分钟。"
+      },
+      "group_cooldown_hours_sleep": {
+        "description": "睡眠类冷却（小时）",
+        "type": "float",
+        "default": 12.0,
+        "hint": "睡太少、熬夜共用这个冷却。"
+      },
+      "group_cooldown_hours_fatigue": {
+        "description": "疲劳类冷却（小时）",
+        "type": "float",
+        "default": 12.0,
+        "hint": "静息心率偏高、血氧低、HRV 低共用。"
+      },
+      "group_cooldown_hours_night": {
+        "description": "夜间实时冷却（小时）",
+        "type": "float",
+        "default": 2.0,
+        "hint": "深夜没睡且心率偏高的即时提醒。"
+      },
+      "group_cooldown_hours_period": {
+        "description": "经期类冷却（小时）",
+        "type": "float",
+        "default": 20.0,
+        "hint": "经期开始、经期每日关怀共用。"
+      },
+      "group_cooldown_hours_forecast": {
+        "description": "经期预测冷却（小时）",
+        "type": "float",
+        "default": 168.0,
+        "hint": "默认 7 天，避免连着几天提醒。"
+      },
+      "group_cooldown_hours_hr": {
+        "description": "心率骤升冷却（小时）",
+        "type": "float",
+        "default": 12.0,
+        "hint": "短时间心率明显起伏的提醒。"
+      }
+    }
   },
-  "push_target_umo": {
-    "description": "主动关怀发送目标",
+  "rules": {
+    "type": "object",
+    "description": "异常检测规则",
+    "hint": "判定阈值，不懂就保持默认。",
+    "items": {
+      "baseline_days": {
+        "description": "基线天数",
+        "type": "int",
+        "default": 7,
+        "hint": "用过去多少天算正常均值；历史不足 3 天不触发基线类规则。"
+      },
+      "rule_resting_hr_high": {
+        "description": "检测静息心率偏高",
+        "type": "bool",
+        "default": true,
+        "hint": "需要基线。默认开。"
+      },
+      "resting_hr_z": {
+        "description": "静息心率 z 阈值",
+        "type": "float",
+        "default": 2.0,
+        "hint": "越高越不敏感，默认 2.0。"
+      },
+      "rule_sleep_low": {
+        "description": "检测睡眠不足",
+        "type": "bool",
+        "default": true,
+        "hint": "需要基线。默认开。"
+      },
+      "sleep_short_min": {
+        "description": "比平时少睡多少分钟算不足",
+        "type": "int",
+        "default": 90,
+        "hint": "默认少 90 分钟。"
+      },
+      "rule_hrv_low": {
+        "description": "检测 HRV 偏低",
+        "type": "bool",
+        "default": false,
+        "hint": "需要基线。默认关，避免误报。"
+      },
+      "hrv_z": {
+        "description": "HRV z 阈值",
+        "type": "float",
+        "default": 1.5,
+        "hint": "默认 1.5，越小越敏感。"
+      },
+      "rule_spo2_low": {
+        "description": "检测血氧偏低",
+        "type": "bool",
+        "default": true,
+        "hint": "绝对阈值，不依赖基线。"
+      },
+      "spo2_threshold": {
+        "description": "血氧阈值（%）",
+        "type": "int",
+        "default": 95,
+        "hint": "低于这个值才提醒，默认 95。"
+      },
+      "hr_spike_enabled": {
+        "description": "检测心率骤升",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关，避免活动时误报。"
+      },
+      "rule_late_night": {
+        "description": "检测昨晚熬夜",
+        "type": "bool",
+        "default": true,
+        "hint": "按入睡时间判断。"
+      },
+      "late_night_bedtime_min": {
+        "description": "几点后入睡算熬夜（分钟）",
+        "type": "int",
+        "default": 30,
+        "hint": "默认 00:30 后。填 30 表示 00:30。"
+      },
+      "rule_late_night_realtime": {
+        "description": "深夜实时提醒",
+        "type": "bool",
+        "default": true,
+        "hint": "她此刻还没睡且心率偏高时提醒。"
+      },
+      "late_night_start_time": {
+        "description": "深夜实时开始时间",
+        "type": "string",
+        "default": "01:00",
+        "hint": "格式 HH:MM，默认 01:00。"
+      },
+      "late_night_end_time": {
+        "description": "深夜实时结束时间",
+        "type": "string",
+        "default": "05:00",
+        "hint": "格式 HH:MM，默认 05:00。"
+      },
+      "late_night_hr_ratio": {
+        "description": "夜间心率倍率",
+        "type": "float",
+        "default": 1.15,
+        "hint": "高于静息心率的这个倍数才算偏高。"
+      },
+      "rule_period_started": {
+        "description": "经期开始提醒",
+        "type": "bool",
+        "default": true,
+        "hint": "默认开。"
+      },
+      "period_daily_care": {
+        "description": "经期每日关怀",
+        "type": "bool",
+        "default": true,
+        "hint": "经期期间每天一条；不占每日上限。"
+      },
+      "period_daily_step_threshold": {
+        "description": "经期步数阈值",
+        "type": "int",
+        "default": 7000,
+        "hint": "超过这个步数就提醒她躺下歇着。"
+      },
+      "rule_period_soon": {
+        "description": "经期临近提醒",
+        "type": "bool",
+        "default": true,
+        "hint": "默认开。"
+      },
+      "period_soon_days": {
+        "description": "提前几天提醒",
+        "type": "int",
+        "default": 2,
+        "hint": "距预测经期还剩几天内提醒。"
+      },
+      "period_soon_max_stale_days": {
+        "description": "数据陈旧上限（天）",
+        "type": "int",
+        "default": 5,
+        "hint": "数据太旧就不提醒，避免经期已到还在说快来了。"
+      }
+    }
+  },
+  "chat": {
+    "type": "object",
+    "description": "聊天关怀",
+    "hint": "聊天里顺口关心的强度。",
+    "items": {
+      "chat_hint_max_items": {
+        "description": "每轮最多提几条",
+        "type": "int",
+        "default": 2,
+        "hint": "聊天里最多顺口提几个健康要点。"
+      },
+      "chat_hint_ttl_hours": {
+        "description": "同一要点静默（小时）",
+        "type": "float",
+        "default": 6.0,
+        "hint": "同一件事几小时内不重复提。"
+      },
+      "chat_hint_dedup_push": {
+        "description": "聊天提过就不单独推",
+        "type": "bool",
+        "default": true,
+        "hint": "当天聊天里提过，就不再发主动关怀。"
+      }
+    }
+  },
+  "mirror": {
+    "type": "object",
+    "description": "身体镜像",
+    "hint": "沈星回的心率、情绪与数据共振。",
+    "items": {
+      "mirror_enabled": {
+        "description": "启用身体镜像",
+        "type": "bool",
+        "default": true,
+        "hint": "根据对话和健康数据生成沈星回的心率与情绪。"
+      },
+      "mirror_name": {
+        "description": "角色名",
+        "type": "string",
+        "default": "沈星回",
+        "hint": "写进镜像状态里的名字。"
+      },
+      "mirror_target_umo": {
+        "description": "固定目标会话",
+        "type": "string",
+        "default": "sxh:FriendMessage:3800806724",
+        "hint": "插件只在这个会话生效（心跳注入/关怀/主动推送都不碰别的会话）。换会话就改这里，改完重载插件。"
+      },
+      "mirror_decay_minutes": {
+        "description": "心率衰减时长（分钟）",
+        "type": "int",
+        "default": 25,
+        "hint": "情绪过去后心率回落的快慢。"
+      },
+      "mirror_emotion_gap_minutes": {
+        "description": "情绪落点间隔（分钟）",
+        "type": "int",
+        "default": 5,
+        "hint": "两次情绪点之间至少隔多久。"
+      },
+      "mirror_daily_emotion_points": {
+        "description": "每日情绪点上限",
+        "type": "int",
+        "default": 20,
+        "hint": "防止一天写太多点。"
+      },
+      "mirror_chat_cooldown_minutes": {
+        "description": "对话更新冷却（分钟）",
+        "type": "int",
+        "default": 20,
+        "hint": "两次对话改变心率之间至少隔多久。"
+      },
+      "mirror_auto_rest_hours": {
+        "description": "多久没说话自动静息（小时）",
+        "type": "int",
+        "default": 2,
+        "hint": "填 0 关闭自动补点。"
+      },
+      "mirror_auto_rest_recent_guard_minutes": {
+        "description": "静息补点保护窗口（分钟）",
+        "type": "int",
+        "default": 30,
+        "hint": "最近刚有数据就不补，避免打架。"
+      },
+      "mirror_data_resonance_enabled": {
+        "description": "健康数据共振",
+        "type": "bool",
+        "default": true,
+        "hint": "手机上报后更新镜像心率曲线。"
+      },
+      "mirror_data_whisper_enabled": {
+        "description": "允许数据私语",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关。开启后数据共振时可能主动说一句。"
+      },
+      "mirror_data_debounce_minutes": {
+        "description": "数据私语防抖（分钟）",
+        "type": "int",
+        "default": 15,
+        "hint": "两次私语之间至少隔多久。"
+      },
+      "mirror_data_whisper_cooldown_minutes": {
+        "description": "数据私语冷却（分钟）",
+        "type": "int",
+        "default": 40,
+        "hint": "更长的冷却，避免频繁开口。"
+      }
+    }
+  },
+  "misc": {
+    "type": "object",
+    "description": "维护",
+    "hint": "日志与数据维护。",
+    "items": {
+      "care_log_enabled": {
+        "description": "保存关怀记录",
+        "type": "bool",
+        "default": true,
+        "hint": "把每次主动关怀写到数据目录，方便事后查看。"
+      }
+    }
+  },
+  "_config_version": {
+    "description": "配置结构版本（勿改）",
     "type": "string",
     "default": "",
-    "hint": "留空＝发到最近说过话的会话。填了＝主动关怀固定发到这个会话（填 unified_msg_origin，例如 default:private:你的会话ID）。"
+    "invisible": true,
+    "hint": "插件自动维护，用来只迁移一次旧配置。"
   },
   "monitor_enabled": {
-    "description": "主动关怀总开关",
-    "type": "bool",
-    "default": false,
-    "hint": "开启后会定时扫描健康数据，发现异常时主动发消息关心。建议先用 /health test 验证规则无误再开。"
-  },
-  "check_interval": {
-    "description": "扫描间隔（秒）",
-    "type": "int",
-    "default": 900,
-    "hint": "每隔多少秒扫一次健康数据。默认 900 秒＝15 分钟。"
-  },
-  "baseline_days": {
-    "description": "基线天数",
-    "type": "int",
-    "default": 7,
-    "hint": "用过去多少天的数据算「正常水平」。历史不足 3 天时不会触发任何关怀。"
-  },
-  "quiet_hours_start": {
-    "description": "静默时段开始（点）",
-    "type": "int",
-    "default": 23,
-    "hint": "这个点之后不推送关怀。跨天写，比如 23 到 7。"
-  },
-  "quiet_hours_end": {
-    "description": "静默时段结束（点）",
-    "type": "int",
-    "default": 7,
-    "hint": "这个点之前不推送关怀。"
-  },
-  "care_guard_enabled": {
-    "description": "推送闸门总开关",
+    "description": "旧版配置：monitor_enabled（勿改）",
     "type": "bool",
     "default": true,
-    "hint": "开启后按「簇冷却 + 每日上限 + 最小间隔 + 对话互斥」节流。关闭则哪条异常先命中就推哪条，不做任何节流。"
-  },
-  "daily_push_limit": {
-    "description": "每日推送上限（条）",
-    "type": "int",
-    "default": 2,
-    "hint": "一天最多主动推几条，经期簇不占用这个额度。写 0 表示不限。"
-  },
-  "min_push_interval_minutes": {
-    "description": "两条关怀最小间隔（分钟）",
-    "type": "int",
-    "default": 180,
-    "hint": "默认 180 分钟，避免一天里连续刷屏。写 0 表示不限制。"
-  },
-  "dialog_guard_minutes": {
-    "description": "对话互斥窗口（分钟）",
-    "type": "int",
-    "default": 5,
-    "hint": "最近这么多分钟内她说过话、或机器人刚回过她，就跳过本轮，避免插话抢话和说法自相矛盾。"
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
   "care_in_chat_enabled": {
-    "description": "聊天内自然关怀",
+    "description": "旧版配置：care_in_chat_enabled（勿改）",
     "type": "bool",
     "default": true,
-    "hint": "开启后，她每轮对话都会在系统提示里收到一小段「今天可以顺口关心一句」的备忘（经期语境行 + 最多若干条要点），由角色自己决定说不说。它不新增消息、不占主动推送的每日额度、不计冷却，也不会和她的对话撞车；若觉得她说话时关心得太密，可关掉。"
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "chat_hint_max_items": {
-    "description": "聊天内每轮最多几个要点",
+  "check_interval": {
+    "description": "旧版配置：check_interval（勿改）",
     "type": "int",
-    "default": 2,
-    "hint": "每次注入最多带几条关怀要点（经期语境行不计入）。调小=更克制，1 条最自然，0 或负数按 1 条处理。"
+    "default": 900,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "chat_hint_ttl_hours": {
-    "description": "同一要点重复注入间隔（小时）",
-    "type": "float",
-    "default": 6,
-    "hint": "同一个要点注入过之后，多少小时内不再重复注入，避免她连发消息时被反复念叨。默认 6 小时；可填 0.5 表示半小时。语境行不受此项限制。"
-  },
-  "chat_hint_dedup_push": {
-    "description": "反向去重：聊天提过就不再单独推",
-    "type": "bool",
-    "default": true,
-    "hint": "开启后，聊天里已经顺口提过的要点，当天不再走主动推送单独发一条，避免「刚聊完又被单发一遍」。判定以「是否已注入过」近似（无法确认模型有没有真说出口），偏保守：宁可少发一条，也不重复。"
-  },
-  "period_daily_care": {
-    "description": "经期每日关怀（每天推一条）",
-    "type": "bool",
-    "default": true,
-    "hint": "开启：经期期间每天推一条体贴关怀给她（当天步数达到 period_daily_step_threshold 时，改成心疼她走太多路、叮嘱躺好歇着）。这条不占每日推送上限，额度与它无关。关闭：经期期间不再每天推，只保留「经期开始」和「临近经期」两条提醒。"
-  },
-  "group_cooldown_hours_sleep": {
-    "description": "「睡眠」簇冷却（小时）",
+  "quiet_hours_start": {
+    "description": "旧版配置：quiet_hours_start（勿改）",
     "type": "int",
-    "default": 12,
-    "hint": "包含：睡太少(sleep_short)、熬夜(late_night)。同簇任一条推过之后，这么久内不再推同簇关怀。"
+    "default": 23,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "group_cooldown_hours_fatigue": {
-    "description": "「疲劳」簇冷却（小时）",
+  "quiet_hours_end": {
+    "description": "旧版配置：quiet_hours_end（勿改）",
     "type": "int",
-    "default": 12,
-    "hint": "包含：静息心率偏高、血氧偏低、HRV 偏低。"
-  },
-  "group_cooldown_hours_night": {
-    "description": "「夜间实时」簇冷却（小时）",
-    "type": "int",
-    "default": 2,
-    "hint": "包含：深夜还没睡且心率偏高(late_night_realtime)。是对当下行为的即时干预，冷却别太长。"
-  },
-  "group_cooldown_hours_period": {
-    "description": "「经期」簇冷却（小时）",
-    "type": "int",
-    "default": 20,
-    "hint": "包含：经期开始提醒、经期每日体贴。默认 20 小时＝一天最多一次，且不占用每日上限。"
-  },
-  "group_cooldown_hours_forecast": {
-    "description": "「经期预测」簇冷却（小时）",
-    "type": "int",
-    "default": 168,
-    "hint": "包含：临近经期倒计时提醒。默认 168 小时＝一周一次，避免「还有3天/2天/1天」连着刷屏。"
-  },
-  "rule_resting_hr_high": {
-    "description": "规则：静息心率偏高",
-    "type": "bool",
-    "default": true,
-    "hint": "今天静息心率明显高于历史基线时触发。"
-  },
-  "resting_hr_z": {
-    "description": "静息心率偏离阈值",
-    "type": "float",
-    "default": 2.0,
-    "hint": "比基线高多少个标准差算异常。越大越不敏感。默认 2.0。"
-  },
-  "rule_spo2_low": {
-    "description": "规则：血氧偏低",
-    "type": "bool",
-    "default": true,
-    "hint": "血氧低于绝对阈值时触发。"
-  },
-  "spo2_threshold": {
-    "description": "血氧阈值（%）",
-    "type": "float",
-    "default": 95,
-    "hint": "血氧低于这个值算异常。默认 95。"
-  },
-  "rule_sleep_low": {
-    "description": "规则：睡眠时长偏短",
-    "type": "bool",
-    "default": true,
-    "hint": "昨晚睡眠时长明显短于历史基线时触发。"
-  },
-  "sleep_short_min": {
-    "description": "睡眠偏短阈值（分钟）",
-    "type": "int",
-    "default": 90,
-    "hint": "比平时少睡多少分钟算异常。默认 90 分钟。"
-  },
-  "rule_late_night": {
-    "description": "规则：熬夜（次日复盘）",
-    "type": "bool",
-    "default": true,
-    "hint": "入睡时间晚于阈值时触发。基于 HAE 睡眠汇总的 bedtime，通常第二天才有。"
-  },
-  "late_night_bedtime_min": {
-    "description": "熬夜阈值（凌晨第几分钟）",
-    "type": "int",
-    "default": 30,
-    "hint": "凌晨 0:30 之后入睡算熬夜，就填 30。凌晨 1:00 之后算，就填 60。"
-  },
-  "rule_late_night_realtime": {
-    "description": "实时熬夜判定（深夜窗口 + 心率偏高）",
-    "type": "bool",
-    "default": true,
-    "hint": "开启后，深夜窗口内收到数据时，若心率高于静息，就触发熬夜关怀。"
-  },
-  "late_night_start_time": {
-    "description": "实时熬夜·开始时间",
-    "type": "string",
-    "default": "01:00",
-    "hint": "按 24 小时制填 HH:MM，例如 01:00 代表凌晨一点开始进入深夜监测。"
-  },
-  "late_night_end_time": {
-    "description": "实时熬夜·结束时间",
-    "type": "string",
-    "default": "05:00",
-    "hint": "格式同上，HH:MM。结束时间早于开始时间会被当成跨天窗口，例如 23:00 → 05:00。"
-  },
-  "late_night_hr_ratio": {
-    "description": "实时熬夜：心率高于静息的倍数",
-    "type": "float",
-    "default": 1.15,
-    "hint": "1.15 表示心率比静息高 15% 以上，才算「人还醒着」。"
-  },
-  "hr_spike_enabled": {
-    "description": "规则：心率骤升",
-    "type": "bool",
-    "default": false,
-    "hint": "90 分钟内涨 30 bpm 以上会提醒一次。数据稀疏或运动多时容易误报，默认关。"
-  },
-  "rule_hrv_low": {
-    "description": "规则：HRV 偏低",
-    "type": "bool",
-    "default": false,
-    "hint": "HRV 个体差异大，默认关。开了的话 HRV 明显低于基线会触发。"
-  },
-  "hrv_z": {
-    "description": "HRV 偏离阈值",
-    "type": "float",
-    "default": 1.5,
-    "hint": "比基线低多少个标准差算异常。默认 1.5。"
-  },
-  "rule_period_started": {
-    "description": "规则：经期开始关怀",
-    "type": "bool",
-    "default": true,
-    "hint": "检测到「今天是经期第 1 天」时主动关怀一次。"
-  },
-  "period_daily_step_threshold": {
-    "description": "经期步数过多阈值（步）",
-    "type": "int",
-    "default": 7000,
-    "hint": "经期期间当天步数达到此值时，触发走累了躺好歇着的关怀。默认 7000。"
-  },
-  "rule_period_soon": {
-    "description": "规则：经期临近提醒",
-    "type": "bool",
-    "default": true,
-    "hint": "距预测经期仅剩几天时提醒一次。需至少两次经期记录，周期才有依据。"
-  },
-  "period_soon_days": {
-    "description": "经期提前提醒天数",
-    "type": "int",
-    "default": 2,
-    "hint": "距预测经期还剩几天时开始提醒，填 2 表示提前 2 天。"
-  },
-  "period_soon_max_stale_days": {
-    "description": "经期提醒的数据陈旧上限（天）",
-    "type": "int",
-    "default": 5,
-    "hint": "最新数据超过这个天数就不提醒临近经期，避免她已经来了还在说「快来了」。"
+    "default": 7,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
   "fallback_care": {
-    "description": "兜底关怀文案",
+    "description": "旧版配置：fallback_care（勿改）",
     "type": "string",
-    "default": "今天感觉怎么样？",
-    "hint": "主动关怀注入失败时，用这句直接发给对方。留空则注入失败就静默跳过。"
+    "default": "怎么又不舒服了？过来，跟我说说。",
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "care_log_enabled": {
-    "description": "关怀历史落盘",
+  "listen_port": {
+    "description": "旧版配置：listen_port（勿改）",
+    "type": "int",
+    "default": 8787,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "auth_token": {
+    "description": "旧版配置：auth_token（勿改）",
+    "type": "string",
+    "default": "",
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "push_target_umo": {
+    "description": "旧版配置：push_target_umo（勿改）",
+    "type": "string",
+    "default": "",
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "retention_days": {
+    "description": "旧版配置：retention_days（勿改）",
+    "type": "int",
+    "default": 180,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "care_guard_enabled": {
+    "description": "旧版配置：care_guard_enabled（勿改）",
     "type": "bool",
     "default": true,
-    "hint": "开启后每次推送（成功或失败）都会记进 care_log.jsonl，可用 /health log 查看。"
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "mirror_data_resonance_enabled": {
-    "description": "身体镜像：手机数据共振",
-    "type": "bool",
-    "default": true,
-    "hint": "手机上报健康数据后，让沈星回按她的真实心率轻轻共振。关闭则只走对话心率。"
-  },
-  "mirror_data_debounce_minutes": {
-    "description": "身体镜像：数据共振间隔（分钟）",
-    "type": "int",
-    "default": 15,
-    "hint": "两次数据共振之间至少隔多久，避免连续上报刷点。默认 15 分钟。"
-  },
-  "mirror_data_whisper_enabled": {
-    "description": "身体镜像：数据推送时主动说话",
-    "type": "bool",
-    "default": false,
-    "hint": "关闭后手机推送只更新心率共振和曲线，不会在对话里主动发关怀；健康异常仍由后台主动关怀检测。"
-  },
-  "mirror_data_whisper_cooldown_minutes": {
-    "description": "身体镜像：数据私语冷却（分钟）",
-    "type": "int",
-    "default": 40,
-    "hint": "数据共振时，他主动说一句话的最小间隔。仅在“数据推送时主动说话”开启时生效。"
-  },
-  "mirror_min_interval_seconds": {
-    "description": "身体镜像：生成最小间隔（秒）",
-    "type": "int",
-    "default": 15,
-    "hint": "她连发几条消息时合并成一次生成，默认 15 秒。调太大响应会变慢。"
-  },
-  "mirror_auto_rest_hours": {
-    "description": "身体镜像：静息补点间隔（小时）",
+  "daily_push_limit": {
+    "description": "旧版配置：daily_push_limit（勿改）",
     "type": "int",
     "default": 2,
-    "hint": "超过这么久没对话，就按当前生活状态补一个静息点，避免点太少连不成线。填 0 关闭。"
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "mirror_auto_rest_recent_guard_minutes": {
-    "description": "身体镜像：静息补点情绪保护（分钟）",
+  "min_push_interval_minutes": {
+    "description": "旧版配置：min_push_interval_minutes（勿改）",
     "type": "int",
-    "default": 30,
-    "hint": "补静息点前，如果最近这么多分钟内有情绪点，就跳过本次补点。默认 30 分钟。"
+    "default": 180,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "mirror_decay_minutes": {
-    "description": "身体镜像：心率平复周期（分钟）",
+  "dialog_guard_minutes": {
+    "description": "旧版配置：dialog_guard_minutes（勿改）",
     "type": "int",
-    "default": 25,
-    "hint": "心跳飙高后，15~30 分钟内平滑回落到基础值。默认 25 分钟。"
+    "default": 5,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "mirror_provider_id": {
-    "description": "身体镜像：生成用模型",
-    "type": "string",
-    "default": "",
-    "hint": "留空=用该会话当前聊天模型。建议单独填一个便宜的小模型，这个调用比较频繁。"
+  "group_cooldown_hours_sleep": {
+    "description": "旧版配置：group_cooldown_hours_sleep（勿改）",
+    "type": "float",
+    "default": 12.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "mirror_target_umo": {
-    "description": "身体镜像：只跟哪个私聊会话",
-    "type": "string",
-    "default": "",
-    "hint": "留空=每个私聊各自生成一份（页面显示最近更新的那份）。填 unified_msg_origin 可固定只跟一个私聊，避免别的私聊也生成。一般留空即可。"
+  "group_cooldown_hours_fatigue": {
+    "description": "旧版配置：group_cooldown_hours_fatigue（勿改）",
+    "type": "float",
+    "default": 12.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "mirror_name": {
-    "description": "身体镜像：角色名",
-    "type": "string",
-    "default": "沈星回",
-    "hint": "显示在心率页卡片和曲线图例里。改完要重载插件。"
+  "group_cooldown_hours_night": {
+    "description": "旧版配置：group_cooldown_hours_night（勿改）",
+    "type": "float",
+    "default": 2.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   },
-  "mirror_enabled": {
-    "description": "身体镜像：让沈星回的心率随互动变化",
+  "group_cooldown_hours_period": {
+    "description": "旧版配置：group_cooldown_hours_period（勿改）",
+    "type": "float",
+    "default": 20.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "group_cooldown_hours_forecast": {
+    "description": "旧版配置：group_cooldown_hours_forecast（勿改）",
+    "type": "float",
+    "default": 168.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "group_cooldown_hours_hr": {
+    "description": "旧版配置：group_cooldown_hours_hr（勿改）",
+    "type": "float",
+    "default": 12.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "baseline_days": {
+    "description": "旧版配置：baseline_days（勿改）",
+    "type": "int",
+    "default": 7,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_resting_hr_high": {
+    "description": "旧版配置：rule_resting_hr_high（勿改）",
     "type": "bool",
     "default": true,
-    "hint": "心率页新增一条金色虚线：沈星回的心率会随你们的互动轻轻变化。仅用于角色陪伴体验，不作为医疗数据。关闭后页面只保留你自己的实测线。"
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "resting_hr_z": {
+    "description": "旧版配置：resting_hr_z（勿改）",
+    "type": "float",
+    "default": 2.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_sleep_low": {
+    "description": "旧版配置：rule_sleep_low（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "sleep_short_min": {
+    "description": "旧版配置：sleep_short_min（勿改）",
+    "type": "int",
+    "default": 90,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_hrv_low": {
+    "description": "旧版配置：rule_hrv_low（勿改）",
+    "type": "bool",
+    "default": false,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "hrv_z": {
+    "description": "旧版配置：hrv_z（勿改）",
+    "type": "float",
+    "default": 1.5,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_spo2_low": {
+    "description": "旧版配置：rule_spo2_low（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "spo2_threshold": {
+    "description": "旧版配置：spo2_threshold（勿改）",
+    "type": "int",
+    "default": 95,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "hr_spike_enabled": {
+    "description": "旧版配置：hr_spike_enabled（勿改）",
+    "type": "bool",
+    "default": false,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_late_night": {
+    "description": "旧版配置：rule_late_night（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "late_night_bedtime_min": {
+    "description": "旧版配置：late_night_bedtime_min（勿改）",
+    "type": "int",
+    "default": 30,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_late_night_realtime": {
+    "description": "旧版配置：rule_late_night_realtime（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "late_night_start_time": {
+    "description": "旧版配置：late_night_start_time（勿改）",
+    "type": "string",
+    "default": "01:00",
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "late_night_end_time": {
+    "description": "旧版配置：late_night_end_time（勿改）",
+    "type": "string",
+    "default": "05:00",
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "late_night_hr_ratio": {
+    "description": "旧版配置：late_night_hr_ratio（勿改）",
+    "type": "float",
+    "default": 1.15,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_period_started": {
+    "description": "旧版配置：rule_period_started（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "period_daily_care": {
+    "description": "旧版配置：period_daily_care（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "period_daily_step_threshold": {
+    "description": "旧版配置：period_daily_step_threshold（勿改）",
+    "type": "int",
+    "default": 7000,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_period_soon": {
+    "description": "旧版配置：rule_period_soon（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "period_soon_days": {
+    "description": "旧版配置：period_soon_days（勿改）",
+    "type": "int",
+    "default": 2,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "period_soon_max_stale_days": {
+    "description": "旧版配置：period_soon_max_stale_days（勿改）",
+    "type": "int",
+    "default": 5,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "chat_hint_max_items": {
+    "description": "旧版配置：chat_hint_max_items（勿改）",
+    "type": "int",
+    "default": 2,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "chat_hint_ttl_hours": {
+    "description": "旧版配置：chat_hint_ttl_hours（勿改）",
+    "type": "float",
+    "default": 6.0,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "chat_hint_dedup_push": {
+    "description": "旧版配置：chat_hint_dedup_push（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_enabled": {
+    "description": "旧版配置：mirror_enabled（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_name": {
+    "description": "旧版配置：mirror_name（勿改）",
+    "type": "string",
+    "default": "沈星回",
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_target_umo": {
+    "description": "旧版配置：mirror_target_umo（勿改）",
+    "type": "string",
+    "default": "",
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_decay_minutes": {
+    "description": "旧版配置：mirror_decay_minutes（勿改）",
+    "type": "int",
+    "default": 25,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_emotion_gap_minutes": {
+    "description": "旧版配置：mirror_emotion_gap_minutes（勿改）",
+    "type": "int",
+    "default": 5,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_daily_emotion_points": {
+    "description": "旧版配置：mirror_daily_emotion_points（勿改）",
+    "type": "int",
+    "default": 20,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_chat_cooldown_minutes": {
+    "description": "旧版配置：mirror_chat_cooldown_minutes（勿改）",
+    "type": "int",
+    "default": 20,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_auto_rest_hours": {
+    "description": "旧版配置：mirror_auto_rest_hours（勿改）",
+    "type": "int",
+    "default": 2,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_auto_rest_recent_guard_minutes": {
+    "description": "旧版配置：mirror_auto_rest_recent_guard_minutes（勿改）",
+    "type": "int",
+    "default": 30,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_data_resonance_enabled": {
+    "description": "旧版配置：mirror_data_resonance_enabled（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_data_whisper_enabled": {
+    "description": "旧版配置：mirror_data_whisper_enabled（勿改）",
+    "type": "bool",
+    "default": false,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_data_debounce_minutes": {
+    "description": "旧版配置：mirror_data_debounce_minutes（勿改）",
+    "type": "int",
+    "default": 15,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "mirror_data_whisper_cooldown_minutes": {
+    "description": "旧版配置：mirror_data_whisper_cooldown_minutes（勿改）",
+    "type": "int",
+    "default": 40,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "care_log_enabled": {
+    "description": "旧版配置：care_log_enabled（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "quiet_start": {
+    "description": "旧版配置：quiet_start（勿改）",
+    "type": "int",
+    "default": 23,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "quiet_end": {
+    "description": "旧版配置：quiet_end（勿改）",
+    "type": "int",
+    "default": 7,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
+  },
+  "rule_period_daily": {
+    "description": "旧版配置：rule_period_daily（勿改）",
+    "type": "bool",
+    "default": true,
+    "invisible": true,
+    "hint": "仅用于兼容旧配置，请改上面的分组项。"
   }
 }
